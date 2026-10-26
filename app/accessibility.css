@@ -1,0 +1,9 @@
+@media (max-width: 760px) {
+  .nav-item { min-height: 44px; }
+}
+
+@media (max-width: 480px) {
+  .field input,
+  .field select,
+  .button { min-height: 44px; }
+}
