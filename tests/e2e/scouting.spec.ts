@@ -33,7 +33,7 @@ test("starts empty, validates data, isolates robot panels, and persists observat
 
   await page.getByRole("button", { name: "Scouting de partido" }).click();
   await page.getByLabel("Número de partido").fill("14");
-  await page.getByLabel("Evento").fill("Evento de prueba E2E");
+  await page.getByPlaceholder("Nombre del evento").fill("Evento de prueba E2E");
   await page.getByRole("button", { name: "Crear partido" }).click();
   await expect(page.getByText(/Asigna un equipo registrado/)).toBeVisible();
   await expect(page.locator(".side-match")).toHaveCount(0);
@@ -99,6 +99,20 @@ test("applies and remembers appearance preferences in this browser", async ({ pa
   await expect(page.getByRole("button", { name: "Ocean" })).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Restaurar predeterminados" }).click();
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-theme-v1") || "{}").primary)).toBe("#f2b544");
+});
+
+test("shows official FTC setup guidance without breaking local mode when API credentials are absent", async ({ page }) => {
+  await page.route("**/api/first/events?*", route => route.fulfill({
+    status: 503,
+    contentType: "application/json",
+    body: JSON.stringify({ error: "FTC Events no está configurado. Configura las credenciales en el servidor." }),
+  }));
+  await page.getByRole("button", { name: "Eventos oficiales" }).click();
+  await expect(page.getByRole("heading", { name: "Eventos oficiales" })).toBeVisible();
+  await expect(page.getByText(/FTC Events no está configurado/)).toBeVisible();
+  await expect(page.getByRole("link", { name: /FTC Events API de FIRST/ })).toHaveAttribute("href", "https://ftc-events.firstinspires.org/services/API");
+  await page.getByRole("button", { name: "Datos y ajustes" }).click();
+  await expect(page.getByRole("heading", { name: "Datos y ajustes" })).toBeVisible();
 });
 
 test("validates imports, previews without saving, detects conflicts, exports, and confirms reset", async ({ page }) => {

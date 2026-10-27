@@ -1,22 +1,23 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, AlertTriangle, ArrowDownToLine, BarChart3, Check, ChevronDown, ClipboardList, Database, FilePlus2, Gauge, Layers3, Menu, Plus, Search, Settings2, ShieldCheck, Swords, Target, Trash2, Users, X } from "lucide-react";
+import { Activity, AlertTriangle, ArrowDownToLine, BarChart3, CalendarDays, Check, ChevronDown, ClipboardList, Database, FilePlus2, Gauge, Layers3, Menu, Plus, Search, Settings2, ShieldCheck, Swords, Target, Trash2, Users, X } from "lucide-react";
 import BrandMark from "@/components/BrandMark";
 import AppearanceSettings from "@/components/AppearanceSettings";
 import ThemeInitializer from "@/components/ThemeInitializer";
 import MatchScoringPanel from "@/components/MatchScoringPanel";
 import AuthWorkspacePanel from "@/components/AuthWorkspacePanel";
 import ScoringAnalytics from "@/components/ScoringAnalytics";
+import OfficialEventsPanel from "@/components/OfficialEventsPanel";
 import { AppData, emptyData, Match, Observation, Team } from "@/lib/types";
 import { BIOBUZZ_RULES, emptyRobotScoutingInput, EventType } from "@/lib/scoring";
 import { exportData, readData, validateImport, writeData } from "@/lib/persistence";
 import { findImportConflict } from "@/lib/import-validation";
 
-type Page = "dashboard" | "scouting" | "teams" | "analytics" | "alliance" | "settings";
+type Page = "dashboard" | "scouting" | "teams" | "analytics" | "alliance" | "official" | "settings";
 const nav: { id: Page; label: string; icon: typeof Activity }[] = [
   { id: "dashboard", label: "Panel", icon: Layers3 }, { id: "scouting", label: "Scouting de partido", icon: ClipboardList },
   { id: "teams", label: "Equipos", icon: Users }, { id: "analytics", label: "Analítica", icon: BarChart3 },
-  { id: "alliance", label: "Selección de alianza", icon: Swords }, { id: "settings", label: "Datos y ajustes", icon: Settings2 },
+  { id: "alliance", label: "Selección de alianza", icon: Swords }, { id: "official", label: "Eventos oficiales", icon: CalendarDays }, { id: "settings", label: "Datos y ajustes", icon: Settings2 },
 ];
 const uid = () => crypto.randomUUID();
 
@@ -72,6 +73,7 @@ export default function Home() {
     </aside>
     <main className="main-area"><header className="topbar"><div className="breadcrumbs"><span>BioBuzz</span><span className="crumb-slash">/</span><b>{nav.find(n=>n.id===page)?.label}</b></div><div className="top-actions"><span className="top-season">{syncState==="local"?"LOCAL":syncState==="saving"?"SINCRONIZANDO":syncState==="saved"?"GUARDADO EN SUPABASE":"ERROR DE SINCRONIZACIÓN"}</span><span className="top-season">TEMPORADA <b>2026–27</b></span><div className="top-avatar">B</div></div></header>
       <div className="content">
+        {page==="official"&&<OfficialEventsPanel workspaceId={remoteReady?workspaceId:null}/>}
         {page==="dashboard"&&<><div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line"/> PANEL DE CONTROL <span className="eyebrow-muted">/ TEMPORADA 26–27</span></div><h1>Centro de scouting</h1><p className="subheading">Resumen de observaciones y actividad de tu espacio local.</p></div><button className="button button-primary" onClick={()=>setPage("scouting")}><Plus size={16}/> Comenzar scouting</button></div>
           <div className="notice"><div className="notice-icon"><AlertTriangle size={16}/></div><div><b>Datos de este dispositivo</b><span>Los equipos, partidos y observaciones se guardan localmente. No hay sincronización entre usuarios ni eventos oficiales conectados.</span></div><button onClick={()=>setPage("settings")}>Administrar datos <span>→</span></button></div>
           <div className="metric-grid">{metrics.map(m=><div className="metric-card" key={m.label}><div className="metric-top"><span>{m.label}</span><m.icon size={16}/></div><div className="metric-value">{ready?m.value:"—"}</div><div className="metric-foot"><span className="metric-dot"/>Datos registrados localmente</div></div>)}</div>

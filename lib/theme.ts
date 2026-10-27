@@ -3,7 +3,7 @@ export type ThemeColors = { primary: string; secondary: string; accent: string; 
 export const defaultTheme: ThemeColors = { primary: "#f2b544", secondary: "#202833", accent: "#e8a928", background: "#10151b", surface: "#191f27", mode: "dark" };
 export const palettes: { name: string; colors: ThemeColors }[] = [
   { name: "Honeycomb", colors: defaultTheme },
-  { name: "Aztech", colors: { primary: "#7047eb", secondary: "#282044", accent: "#ffb454", background: "#11101a", surface: "#1d1b29", mode: "dark" } },
+  { name: "Violet", colors: { primary: "#7047eb", secondary: "#282044", accent: "#ffb454", background: "#11101a", surface: "#1d1b29", mode: "dark" } },
   { name: "Midnight", colors: { primary: "#6678f5", secondary: "#232a42", accent: "#50d5e8", background: "#0d1120", surface: "#171d30", mode: "dark" } },
   { name: "Forest", colors: { primary: "#397758", secondary: "#20362c", accent: "#87bd75", background: "#111813", surface: "#1b251e", mode: "dark" } },
   { name: "Ocean", colors: { primary: "#267fba", secondary: "#203447", accent: "#55c5e8", background: "#0e171d", surface: "#18242d", mode: "dark" } },

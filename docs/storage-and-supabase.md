@@ -1,22 +1,35 @@
-# Almacenamiento BioBuzz
+# Almacenamiento y fuentes oficiales
 
-## Comportamiento disponible
+## Datos de scouting
 
-Sin una sesión y un grupo seleccionado, la aplicación conserva el modo de navegador con `localStorage` (`biobuzz-scout-v1`) y exportación/importación JSON. Con Supabase configurado, la interfaz permite crear cuenta, iniciar/cerrar sesión, crear grupos y abrir datos aislados por grupo. Los cambios se envían al servidor con estado visible; un error nunca se anuncia como guardado. La migración local requiere confirmación, valida la estructura, evita duplicados al reintentar y permite borrar la copia local solo después de verificarla y confirmarlo de nuevo.
+Sin sesión/grupo, equipos, partidos y observaciones usan `localStorage` (`biobuzz-scout-v1`) con importación/exportación JSON. Con Supabase configurado, esas entidades se sincronizan en el grupo elegido bajo RLS. La importación local exige confirmación, valida la estructura y verifica los datos persistidos antes de ofrecer borrar la copia local.
 
-La migración versionada `supabase/migrations/202610270001_biobuzz_core.sql` agrega perfiles, membresías y roles, equipos, temporadas, eventos, partidos, observaciones, pit scouting, tareas, configuración versionada de reglas, resultados calculados, resultados oficiales, preferencias e invitaciones. RLS limita acceso por grupo y rol. No se necesita ni se usa una clave `service_role` en el cliente.
+## Eventos y resultados FIRST
 
-Actualmente la UI sincroniza equipos, partidos y Match Scouting. Pit Scouting, tareas, preferencias remotas, resultados históricos y administración visual de miembros/invitaciones tienen tablas preparadas pero requieren completar sus pantallas/operaciones antes de considerarlas funcionales.
+La sección **Eventos oficiales** consulta FTC Events desde Route Handlers del servidor. BIOBUZZ 2026–2027 usa el año de temporada FIRST/API `2026` (el año de inicio de temporada); usar `2027` en la ruta produjo `Invalid Season Requested`. La selección previa guardada como 2027 se migra a 2026 en el cliente. Usa:
 
-## Configuración externa necesaria
+- `GET /v2.0/{season}/events`
+- `GET /v2.0/{season}/schedule/{eventCode}/{qual|playoff}/hybrid`
 
-1. Crear un proyecto Supabase y habilitar proveedor de correo/contraseña.
-2. Aplicar la migración versionada mediante el flujo de migraciones de Supabase.
-3. Definir `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_ANON_KEY` en `.env.local`, reiniciar Next.js y configurar el callback `/auth/callback` en el proveedor.
-4. Verificar RLS con dos usuarios de grupos separados antes de usar datos reales.
+La respuesta híbrida contiene los partidos programados y, cuando FIRST los ha publicado, los resultados finales, puntajes AUTO y de faltas. `null` sigue siendo pendiente; el valor numérico `0` se conserva como resultado oficial. Los IDs se construyen con temporada, código de evento, nivel, serie y número. La selección se guarda localmente por grupo o espacio local; el caché de calendarios se separa por los mismos identificadores.
 
-No se configuró ni se modificó un proyecto remoto en esta implementación.
+FIRST solicita credenciales Basic Auth propias. Configura `FTC_EVENTS_USERNAME` y `FTC_EVENTS_AUTHORIZATION_KEY` solo en servidor. El adaptador pasa `If-Modified-Since` usando la última cabecera `Last-Modified`, maneja 304/401/429/desconexión y mantiene la última actualización válida si una consulta falla. Los datos y resultados provienen de la API; el código no crea eventos ni puntajes ficticios.
 
-## Datos FIRST
+## Supabase
 
-La API oficial de FTC Events requiere credenciales que se mantienen en servidor. No hay credenciales en este proyecto; por ello no se importan eventos ni resultados externos. El motor de scoring funciona con observaciones independientes y conserva diferenciados los datos oficiales.
+La migración base `202610270001_biobuzz_core.sql` crea grupos y datos de scouting. `202610270002_first_official_data.sql` agrega una tabla de caché global oficial y una selección por grupo. Para persistir la caché global entre instancias, configura `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` como secretos de servidor. La clave de servicio solo accede a la tabla de caché oficial y nunca se envía al cliente; el resto de datos usa RLS por sesión/grupo. Sin clave de servicio, la interfaz conserva el caché en `localStorage`.
+
+Aplica ambas migraciones desde el flujo de migraciones del proyecto Supabase. No se ejecutó ninguna migración remota ni se configuró un proyecto en este cambio.
+
+## Variables requeridas
+
+```env
+FTC_EVENTS_USERNAME=
+FTC_EVENTS_AUTHORIZATION_KEY=
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+```
+
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` es la clave pública protegida por RLS. No uses prefijo `NEXT_PUBLIC_` en credenciales de FTC ni en la clave `service_role`. Solicita acceso a FIRST en [FTC Events API registration](https://ftc-events.firstinspires.org/services/API/register). FIRST sincroniza los resultados después del evento, por lo que una consulta correcta no implica que los resultados de todos los partidos ya estén publicados.
