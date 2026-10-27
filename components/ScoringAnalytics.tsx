@@ -1,0 +1,8 @@
+import { AppData } from "@/lib/types";
+import { calculateRobotScore } from "@/lib/scoring";
+
+export default function ScoringAnalytics({ data }: { data: AppData }) {
+  const records=data.observations.filter(item=>item.scoringConfirmed&&item.scoring).map(item=>({item,score:calculateRobotScore(item.scoring!)}));
+  const groups=new Map<number,typeof records>();for(const record of records){const values=groups.get(record.item.teamNumber)||[];values.push(record);groups.set(record.item.teamNumber,values);}
+  return <section className="panel wide-panel"><div className="panel-head"><div><h2>Promedios de scoring estimado</h2><p>Solo registros con cantidades confirmadas; cada muestra representa un robot en un partido.</p></div></div>{groups.size===0?<div className="analytics-empty"><b>Sin scoring confirmado</b><span>Los registros narrativos no se convierten automáticamente a puntos.</span></div>:<div className="table-wrap"><table><thead><tr><th>Equipo</th><th>Muestras</th><th>Prom. AUTO</th><th>Prom. TELEOP</th><th>Prom. total</th><th>Prom. TIPS</th><th>Desv. total</th></tr></thead><tbody>{[...groups.entries()].sort(([a],[b])=>a-b).map(([team,rows])=>{const mean=(field:"autoPoints"|"teleopPoints"|"totalMatchPoints"|"totalTips")=>rows.reduce((sum,row)=>sum+row.score[field],0)/rows.length;const avg=mean("totalMatchPoints");const sd=Math.sqrt(rows.reduce((sum,row)=>sum+(row.score.totalMatchPoints-avg)**2,0)/rows.length);return <tr key={team}><td>{team}</td><td>{rows.length}</td><td>{mean("autoPoints").toFixed(1)}</td><td>{mean("teleopPoints").toFixed(1)}</td><td>{avg.toFixed(1)}</td><td>{mean("totalTips").toFixed(1)}</td><td>{sd.toFixed(1)}</td></tr>;})}</tbody></table></div>}</section>;
+}

@@ -55,15 +55,15 @@ test("starts empty, validates data, isolates robot panels, and persists observat
   let saved = await page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}"));
   expect(saved.observations).toHaveLength(0);
 
-  await page.getByLabel(/AUTO/).fill("AUTO real robot 9101");
+  await page.getByPlaceholder(/Acciones aut/).fill("AUTO real robot 9101");
   await page.getByRole("button", { name: /Guardar borrador/ }).click();
   await expect(page.getByText("Borrador guardado")).toBeVisible();
   await page.locator(".robot-tab").nth(1).click();
-  await page.getByLabel(/AUTO/).fill("AUTO real robot 9102");
-  await page.getByRole("button", { name: /Enviar registro/ }).click();
-  await expect(page.getByText("Observacion enviada")).toBeVisible();
+  await page.getByPlaceholder(/Acciones aut/).fill("AUTO real robot 9102");
+  await page.getByRole("button", { name: /Guardar registro/ }).click();
+  await expect(page.getByText("Registro guardado localmente")).toBeVisible();
   await page.locator(".robot-tab").nth(0).click();
-  await expect(page.getByLabel(/AUTO/)).toHaveValue("AUTO real robot 9101");
+  await expect(page.getByPlaceholder(/Acciones aut/)).toHaveValue("AUTO real robot 9101");
 
   await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations.length)).toBe(2);
   saved = await page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}"));
@@ -75,9 +75,9 @@ test("starts empty, validates data, isolates robot panels, and persists observat
   await page.getByRole("button", { name: "Scouting de partido" }).click();
   await page.getByLabel("Seleccionar partido").selectOption({ label: "M14 · Evento de prueba E2E" });
   await page.locator(".robot-tab").nth(0).click();
-  await expect(page.getByLabel(/AUTO/)).toHaveValue("AUTO real robot 9101");
+  await expect(page.getByPlaceholder(/Acciones aut/)).toHaveValue("AUTO real robot 9101");
   await page.locator(".robot-tab").nth(1).click();
-  await expect(page.getByLabel(/AUTO/)).toHaveValue("AUTO real robot 9102");
+  await expect(page.getByPlaceholder(/Acciones aut/)).toHaveValue("AUTO real robot 9102");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".robot-tab")).toHaveCount(4);
@@ -85,6 +85,20 @@ test("starts empty, validates data, isolates robot panels, and persists observat
   await expect(page.getByRole("button", { name: "Scouting de partido" })).toBeVisible();
   expect(await page.getByRole("button", { name: "Scouting de partido" }).evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
   expect(await page.getByLabel(/Seleccionar partido/).evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+});
+
+test("applies and remembers appearance preferences in this browser", async ({ page }) => {
+  await page.getByRole("button", { name: "Datos y ajustes" }).click();
+  await page.getByRole("button", { name: "Ocean" }).click();
+  await expect.poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue("--bg"))).toBe("#0e171d");
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-theme-v1") || "{}").primary)).toBe("#267fba");
+
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue("--bg"))).toBe("#0e171d");
+  await page.getByRole("button", { name: "Datos y ajustes" }).click();
+  await expect(page.getByRole("button", { name: "Ocean" })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Restaurar predeterminados" }).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-theme-v1") || "{}").primary)).toBe("#f2b544");
 });
 
 test("validates imports, previews without saving, detects conflicts, exports, and confirms reset", async ({ page }) => {

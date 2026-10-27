@@ -1,4 +1,5 @@
 import type { AppData, Match, Observation, Team } from "./types";
+import { calculateRobotScore, isEventType } from "./scoring.ts";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -42,7 +43,8 @@ export function validateImportData(value: unknown): AppData {
       new Set(raw.teams).size !== 4) {
       throw new Error(`El partido ${index + 1} tiene datos inválidos o equipos sin registrar.`);
     }
-    return { id: raw.id, number: Number(raw.number), event: raw.event.trim(), teams: raw.teams as Match["teams"], createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date(0).toISOString() };
+    if (raw.eventType !== undefined && !isEventType(raw.eventType)) throw new Error(`El partido ${index + 1} tiene un tipo de evento inválido.`);
+    return { id: raw.id, number: Number(raw.number), event: raw.event.trim(), eventType: isEventType(raw.eventType) ? raw.eventType : "not_configured", teams: raw.teams as Match["teams"], createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date(0).toISOString() };
   });
   if (new Set(matches.map(match => match.id)).size !== matches.length ||
     new Set(matches.map(match => `${match.event.toLocaleLowerCase()}::${match.number}`)).size !== matches.length) {
@@ -61,12 +63,20 @@ export function validateImportData(value: unknown): AppData {
     for (const field of ["auto", "teleop", "hiveTip", "pollen", "nectar", "flowerGarden", "leavePark", "issues", "notes"]) {
       if (raw[field] !== undefined && typeof raw[field] !== "string") throw new Error(`La observación ${index + 1} tiene campos de texto inválidos.`);
     }
+    if (raw.scoutName !== undefined && typeof raw.scoutName !== "string") throw new Error(`El scout de la observación ${index + 1} no es válido.`);
+    if (raw.scoringConfirmed === true && !raw.scoring) throw new Error(`La observación ${index + 1} confirma un desglose de puntos inexistente.`);
+    if (raw.scoring !== undefined) {
+      try { calculateRobotScore(raw.scoring as Parameters<typeof calculateRobotScore>[0]); }
+      catch { throw new Error(`La observación ${index + 1} contiene cantidades de scoring inválidas.`); }
+    }
     return {
       id: raw.id, matchId: raw.matchId, teamNumber: Number(raw.teamNumber), status: raw.status as Observation["status"],
       auto: String(raw.auto ?? ""), teleop: String(raw.teleop ?? ""), hiveTip: String(raw.hiveTip ?? ""),
       pollen: String(raw.pollen ?? ""), nectar: String(raw.nectar ?? ""), flowerGarden: String(raw.flowerGarden ?? ""),
       leavePark: String(raw.leavePark ?? ""), issues: String(raw.issues ?? ""), notes: String(raw.notes ?? ""),
       updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date(0).toISOString(),
+      scoutName: typeof raw.scoutName === "string" ? raw.scoutName.trim() : undefined,
+      scoring: raw.scoring as Observation["scoring"], scoringConfirmed: raw.scoringConfirmed === true,
     };
   });
   if (new Set(observations.map(item => item.id)).size !== observations.length ||
@@ -81,4 +91,27 @@ export function findImportConflict(current: AppData, incoming: AppData): string 
   if (incoming.matches.some(match => current.matches.some(old => old.id === match.id || (old.number === match.number && old.event.trim().toLocaleLowerCase() === match.event.trim().toLocaleLowerCase())))) return "Ya existe un partido importado con ese evento y número.";
   if (incoming.observations.some(item => current.observations.some(old => old.id === item.id || (old.matchId === item.matchId && old.teamNumber === item.teamNumber)))) return "La importación contiene observaciones que ya están guardadas.";
   return null;
+}
+
+export function mergeLegacyData(current: AppData, incoming: AppData) {
+  const teams = [...current.teams];
+  const matches = [...current.matches];
+  const observations = [...current.observations];
+  let insertedTeams = 0, insertedMatches = 0, insertedObservations = 0;
+  for (const item of incoming.teams) {
+    const old = teams.find(value => value.id === item.id || value.number === item.number);
+    if (!old) { teams.push(item); insertedTeams++; }
+    else if (old.number !== item.number || old.name !== item.name || old.notes !== item.notes) throw new Error(`Conflicto en el equipo ${item.number}; no se sobrescribió.`);
+  }
+  for (const item of incoming.matches) {
+    const old = matches.find(value => value.id === item.id || (value.number === item.number && value.event.trim().toLowerCase() === item.event.trim().toLowerCase()));
+    if (!old) { matches.push(item); insertedMatches++; }
+    else if (old.number !== item.number || old.event.trim().toLowerCase() !== item.event.trim().toLowerCase() || old.teams.join(",") !== item.teams.join(",")) throw new Error(`Conflicto en el partido ${item.number}; no se sobrescribió.`);
+  }
+  for (const item of incoming.observations) {
+    const old = observations.find(value => value.id === item.id || (value.matchId === item.matchId && value.teamNumber === item.teamNumber));
+    if (!old) { observations.push(item); insertedObservations++; }
+    else if (old.matchId !== item.matchId || old.teamNumber !== item.teamNumber || old.status !== item.status || old.auto !== item.auto || old.teleop !== item.teleop || JSON.stringify(old.scoring ?? null) !== JSON.stringify(item.scoring ?? null)) throw new Error(`Conflicto en la observación del equipo ${item.teamNumber}; no se sobrescribió.`);
+  }
+  return { data: { teams, matches, observations }, inserted: { teams: insertedTeams, matches: insertedMatches, observations: insertedObservations } };
 }

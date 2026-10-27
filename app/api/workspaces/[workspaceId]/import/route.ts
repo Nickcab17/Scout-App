@@ -1,0 +1,23 @@
+import { NextResponse } from "next/server";
+import { mergeLegacyData } from "@/lib/import-validation";
+import { validateImport } from "@/lib/persistence";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { AppData } from "@/lib/types";
+type Context={params:Promise<{workspaceId:string}>};
+export async function POST(request:Request,{params}:Context){
+ const supabase=await createSupabaseServerClient();if(!supabase)return NextResponse.json({error:"Supabase no está configurado."},{status:503});
+ const {data:{user},error:authError}=await supabase.auth.getUser();if(authError||!user)return NextResponse.json({error:"Inicia sesión."},{status:401});
+ const {workspaceId}=await params;let body:unknown;try{body=await request.json();}catch{return NextResponse.json({error:"JSON inválido."},{status:400});}
+ let incoming:AppData;try{incoming=validateImport((body as {data?:unknown})?.data);}catch(e){return NextResponse.json({error:e instanceof Error?e.message:"Datos inválidos."},{status:400});}
+ const [t,m,o]=await Promise.all([supabase.from("teams").select("id,number,name,capabilities,autonomous,mechanical,notes,status,created_at").eq("workspace_id",workspaceId),supabase.from("matches").select("id,number,event,event_type,teams,created_at").eq("workspace_id",workspaceId),supabase.from("observations").select("id,match_id,team_number,status,auto,teleop,hive_tip,pollen,nectar,flower_garden,leave_park,issues,notes,scout_name,scoring_input,updated_at").eq("workspace_id",workspaceId)]);
+ const dbError=t.error||m.error||o.error;if(dbError)return NextResponse.json({error:"No se pudieron validar datos existentes del grupo."},{status:403});
+ const current:AppData={teams:(t.data||[]).map(x=>({id:x.id,number:x.number,name:x.name,capabilities:x.capabilities,autonomous:x.autonomous,mechanical:x.mechanical,notes:x.notes,status:x.status,createdAt:x.created_at})),matches:(m.data||[]).map(x=>({id:x.id,number:x.number,event:x.event,eventType:x.event_type,teams:x.teams as [string,string,string,string],createdAt:x.created_at})),observations:(o.data||[]).map(x=>({id:x.id,matchId:x.match_id,teamNumber:x.team_number,status:x.status,auto:x.auto,teleop:x.teleop,hiveTip:x.hive_tip,pollen:x.pollen,nectar:x.nectar,flowerGarden:x.flower_garden,leavePark:x.leave_park,issues:x.issues,notes:x.notes,scoutName:x.scout_name,scoring:x.scoring_input,scoringConfirmed:x.scoring_input!==null,updatedAt:x.updated_at}))};
+ let merged;try{merged=mergeLegacyData(current,incoming);}catch(e){return NextResponse.json({error:e instanceof Error?e.message:"Conflicto de importación."},{status:409});}
+ const teams=incoming.teams.filter(x=>!current.teams.some(y=>y.number===x.number)).map(x=>({id:x.id,workspace_id:workspaceId,number:x.number,name:x.name,capabilities:x.capabilities,autonomous:x.autonomous,mechanical:x.mechanical,notes:x.notes,status:x.status,created_at:x.createdAt}));
+ const matches=incoming.matches.filter(x=>!current.matches.some(y=>y.id===x.id||(y.number===x.number&&y.event.toLowerCase()===x.event.toLowerCase()))).map(x=>({id:x.id,workspace_id:workspaceId,number:x.number,event:x.event,event_type:x.eventType||"not_configured",teams:x.teams,created_at:x.createdAt}));
+ const observations=incoming.observations.filter(x=>!current.observations.some(y=>y.id===x.id||(y.matchId===x.matchId&&y.teamNumber===x.teamNumber))).map(x=>({id:x.id,workspace_id:workspaceId,match_id:x.matchId,team_number:x.teamNumber,scout_user_id:user.id,status:x.status,auto:x.auto,teleop:x.teleop,hive_tip:x.hiveTip,pollen:x.pollen,nectar:x.nectar,flower_garden:x.flowerGarden,leave_park:x.leavePark,issues:x.issues,notes:x.notes,scout_name:x.scoutName||"",scoring_input:x.scoringConfirmed?x.scoring:null,updated_at:x.updatedAt}));
+ for(const [table,rows] of [["teams",teams],["matches",matches],["observations",observations]] as const){if(!rows.length)continue;const {error}=await supabase.from(table).insert(rows as never);if(error)return NextResponse.json({error:"La importación quedó incompleta; reintentar es seguro y no duplica registros.",detail:error.message},{status:409});}
+ const verify=merged.data;const [vt,vm,vo]=await Promise.all([supabase.from("teams").select("number").eq("workspace_id",workspaceId),supabase.from("matches").select("id").eq("workspace_id",workspaceId),supabase.from("observations").select("id").eq("workspace_id",workspaceId)]);
+ if(vt.error||vm.error||vo.error||verify.teams.some(x=>!vt.data?.some(y=>y.number===x.number))||verify.matches.some(x=>!vm.data?.some(y=>y.id===x.id))||verify.observations.some(x=>!vo.data?.some(y=>y.id===x.id)))return NextResponse.json({error:"No fue posible verificar la importación; conserva la copia local."},{status:409});
+ return NextResponse.json({verified:true,inserted:merged.inserted});
+}
