@@ -39,16 +39,16 @@ FTC_EVENTS_USERNAME=
 FTC_EVENTS_AUTHORIZATION_KEY=
 ```
 
-El adaptador utiliza `GET /v2.0/{season}/events` y `/v2.0/{season}/schedule/{eventCode}/{qual|playoff}/hybrid`. El formato híbrido incluye programación y resultados disponibles con puntajes finales, autónomos y de faltas. Las consultas respetan `Last-Modified` / `If-Modified-Since` y conservan la última descarga correcta ante fallas.
+El adaptador usa el índice de temporadas `GET /v2.0`, eventos `/v2.0/{season}/events`, detalle de evento con el parámetro oficial `eventCode`, equipos `/v2.0/{season}/teams?eventCode=...`, calendario híbrido `/v2.0/{season}/schedule/{eventCode}/{qual|playoff}/hybrid`, resultados `/v2.0/{season}/matches/{eventCode}?tournamentLevel=...` y detalles de scoring `/v2.0/{season}/scores/{eventCode}/{qual|playoff}`. Los nombres de parámetros y los campos HTTP oficiales se conservan; el adaptador traduce sus valores a tipos internos. La caché del servidor es temporal en memoria y el calendario descargado se conserva en el almacenamiento local del navegador.
 
-Para compartir y persistir la caché oficial entre instancias, configura también `SUPABASE_URL` (o `NEXT_PUBLIC_SUPABASE_URL`) y `SUPABASE_SERVICE_ROLE_KEY` como secretos de servidor. Sin esa clave privada, la caché se guarda en el navegador. La selección de evento se asocia al grupo cuando hay una sesión y grupo Supabase activos.
+Las respuestas FIRST respetan `Last-Modified` / `If-Modified-Since`, timeout y reintentos manuales. Ante una falla se conserva la respuesta válida en memoria y el navegador mantiene su última copia local. Los equipos obtenidos por evento son datos oficiales independientes de los registros locales de pit scouting.
 
 ## Configurar Supabase
 
 1. Crea un proyecto Supabase y habilita autenticación por correo y contraseña.
-2. Aplica `supabase/migrations/202610270001_biobuzz_core.sql` y `supabase/migrations/202610270002_first_official_data.sql`.
+2. Para espacios remotos existentes, aplica `supabase/migrations/202610270001_biobuzz_core.sql`. FTC Events no requiere migración ni conexión a Supabase.
 3. Define `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_ANON_KEY`; registra `/auth/callback` como URL de retorno.
-4. Configura `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` en servidor para guardar la caché oficial compartida. No incluyas esta clave en el navegador ni en el repositorio.
+4. Las consultas de FTC Events y la selección del evento permanecen en caché y almacenamiento local; la integración oficial no escribe datos en Supabase.
 5. Comprueba RLS con cuentas de grupos diferentes.
 
-No se configuró un proyecto remoto ni se hizo una solicitud autenticada real a FIRST en este entorno. FTC Events publica datos después de que el torneo concluye y se sincroniza; la interfaz no promete datos en tiempo real.
+FTC Events publica datos cuando FIRST los sincroniza; los resultados y score details pueden no estar disponibles para eventos futuros o partidos en curso. La interfaz conserva los calendarios programados aunque falten resultados.

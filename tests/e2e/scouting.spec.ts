@@ -12,7 +12,7 @@ test("starts empty, validates data, isolates robot panels, and persists observat
   await expect(page.getByText("Aún no hay partidos")).toBeVisible();
   await expect(page.locator(".metric-value").first()).toHaveText("0");
 
-  await page.getByRole("button", { name: "Equipos" }).click();
+  await page.getByRole("button", { name: "Teams" }).click();
   await page.getByLabel("Número de equipo").fill("9101");
   await page.getByRole("button", { name: "Agregar equipo" }).click();
   await expect(page.locator(".team-row")).toHaveCount(0);
@@ -25,13 +25,26 @@ test("starts empty, validates data, isolates robot panels, and persists observat
   }
   await expect(page.locator(".team-row")).toHaveCount(4);
 
+  await page.getByRole("button", { name: "Pit Scouting" }).click();
+  await expect(page.getByRole("heading", { name: "Pit Scouting", exact: true })).toBeVisible();
+  await page.locator(".form-panel select").first().selectOption({ index: 1 });
+  await expect(page.locator(".form-panel select").nth(1)).toHaveValue("unknown");
+  await page.locator(".form-panel select").nth(1).selectOption("team_reported");
+  await page.getByLabel("Capacidades técnicas del robot").fill("Declarado por el equipo: ciclo autónomo de dos HIVE TIPS");
+  await page.getByRole("button", { name: "Guardar Pit Scouting" }).click();
+  await expect(page.locator(".team-row")).toHaveCount(4);
+  const pitRecord = await page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").teams.find((team: { number: number }) => team.number === 9101));
+  expect(pitRecord.capabilitiesSource).toBe("team_reported");
+  expect(pitRecord.updatedAt).toBeTruthy();
+  await page.getByRole("button", { name: "Teams" }).click();
+
   await page.getByLabel("Número de equipo").fill("9101");
   await page.getByLabel("Nombre del equipo").fill("Duplicado local");
   await page.getByRole("button", { name: "Agregar equipo" }).click();
   await expect(page.getByText(/Ya existe un equipo con ese número/)).toBeVisible();
   await expect(page.locator(".team-row")).toHaveCount(4);
 
-  await page.getByRole("button", { name: "Scouting de partido" }).click();
+  await page.getByRole("button", { name: "Match Scouting" }).click();
   await page.getByLabel("Número de partido").fill("14");
   await page.getByPlaceholder("Nombre del evento").fill("Evento de prueba E2E");
   await page.getByRole("button", { name: "Crear partido" }).click();
@@ -72,7 +85,7 @@ test("starts empty, validates data, isolates robot panels, and persists observat
   ]);
 
   await page.reload();
-  await page.getByRole("button", { name: "Scouting de partido" }).click();
+  await page.getByRole("button", { name: "Match Scouting" }).click();
   await page.getByLabel("Seleccionar partido").selectOption({ label: "M14 · Evento de prueba E2E" });
   await page.locator(".robot-tab").nth(0).click();
   await expect(page.getByPlaceholder(/Acciones aut/)).toHaveValue("AUTO real robot 9101");
@@ -82,8 +95,8 @@ test("starts empty, validates data, isolates robot panels, and persists observat
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".robot-tab")).toHaveCount(4);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await expect(page.getByRole("button", { name: "Scouting de partido" })).toBeVisible();
-  expect(await page.getByRole("button", { name: "Scouting de partido" }).evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+  await expect(page.getByRole("button", { name: "Match Scouting" })).toBeVisible();
+  expect(await page.getByRole("button", { name: "Match Scouting" }).evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
   expect(await page.getByLabel(/Seleccionar partido/).evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
 });
 
@@ -107,12 +120,51 @@ test("shows official FTC setup guidance without breaking local mode when API cre
     contentType: "application/json",
     body: JSON.stringify({ error: "FTC Events no está configurado. Configura las credenciales en el servidor." }),
   }));
-  await page.getByRole("button", { name: "Eventos oficiales" }).click();
-  await expect(page.getByRole("heading", { name: "Eventos oficiales" })).toBeVisible();
+  await page.getByRole("button", { name: "Events" }).click();
+  await expect(page.getByRole("heading", { name: "Events" })).toBeVisible();
   await expect(page.getByText(/FTC Events no está configurado/)).toBeVisible();
   await expect(page.getByRole("link", { name: /FTC Events API de FIRST/ })).toHaveAttribute("href", "https://ftc-events.firstinspires.org/services/API");
   await page.getByRole("button", { name: "Datos y ajustes" }).click();
   await expect(page.getByRole("heading", { name: "Datos y ajustes" })).toBeVisible();
+});
+
+test("searches and selects a FIRST event, then displays its scheduled match and published zero score", async ({ page }) => {
+  await page.route("**/api/first/seasons", route => route.fulfill({ json: { currentSeason: 2026, maxSeason: 2026 } }));
+  await page.route("**/api/first/events?*", route => route.fulfill({ json: { season: 2026, events: [
+    { id: "event-1", code: "USALATQ", name: "Athens Qualifier", venue: "Athens High School", address: null, city: "Athens", stateProv: "Alabama", country: "USA", dateStart: "2026-11-01", dateEnd: "2026-11-02", type: "Qualifier" },
+    { id: "event-2", code: "USOTHER", name: "Other Qualifier", venue: null, address: null, city: "Other City", stateProv: null, country: "USA", dateStart: null, dateEnd: null, type: "Qualifier" },
+  ], syncedAt: new Date().toISOString(), stale: false } }));
+  await page.route("**/api/first/events/USALATQ?*", route => route.fulfill({ json: { event: { id: "event-1", code: "USALATQ", name: "Athens Qualifier", venue: "Athens High School", address: null, city: "Athens", stateProv: "Alabama", country: "USA", dateStart: "2026-11-01", dateEnd: "2026-11-02", type: "Qualifier" } } }));
+  await page.route("**/api/first/events/USALATQ/schedule?*", route => route.fulfill({ json: { matches: [{ id: "2026:USALATQ:qual:0:1", level: "qual", series: null, number: 1, description: "Qualification 1", startTime: "2026-11-01T10:00:00", actualStartTime: "2026-11-01T10:00:00", postResultTime: null, redTeams: [{ number: 101, name: "Red Team" }, { number: 102, name: "Red Partner" }], blueTeams: [{ number: 202, name: "Blue Team" }, { number: 203, name: "Blue Partner" }], redFinal: 0, redAuto: 0, redFoul: 0, redDriveControlled: 0, redEndgame: 0, blueFinal: 25, blueAuto: 5, blueFoul: 0, blueDriveControlled: 20, blueEndgame: 0, status: "played" }], syncedAt: new Date().toISOString(), lastModified: null } }));
+  await page.route("**/api/first/events/USALATQ/results/**", route => route.fulfill({ json: { matches: [] } }));
+  await page.route("**/api/first/events/USALATQ/scores/**", route => route.fulfill({ json: { scoreDetails: [] } }));
+  await page.route("**/api/first/events/USALATQ/teams?*", route => route.fulfill({ json: { teams: [{ teamNumber: 101, nameFull: "Red Team" }], teamCountTotal: 1 } }));
+
+  await page.getByRole("button", { name: "Events" }).click();
+  await expect(page.getByRole("heading", { name: "Events" })).toBeVisible();
+  await page.getByPlaceholder("Nombre, ubicación o código").fill("Athens");
+  await page.locator(".official-event-select select").selectOption("USALATQ");
+  await expect(page.getByText("Athens High School · Athens · Alabama · USA")).toBeVisible();
+  await page.getByRole("button", { name: "Match Schedule" }).click();
+  await expect(page.getByRole("heading", { name: "Match Schedule" })).toBeVisible();
+  await page.locator(".official-event-select select").selectOption("USALATQ");
+  await page.getByRole("button", { name: "Actualizar calendario FIRST" }).click();
+  await expect(page.getByText("Disputado · resultado oficial")).toBeVisible();
+  await expect(page.locator(".official-alliance.red strong")).toHaveText("0");
+  await expect(page.locator(".official-alliance.blue strong")).toHaveText("25");
+  await expect(page.locator(".official-alliance.red span")).toHaveText("101 · Red Team / 102 · Red Partner");
+  await page.getByRole("button", { name: "Official Results" }).click();
+  await expect(page.getByRole("heading", { name: "Official Results" })).toBeVisible();
+  await expect(page.locator(".official-alliance.red strong")).toHaveText("0");
+  await page.getByRole("button", { name: "Match Scouting" }).click();
+  await page.locator(".match-setup select").first().selectOption({ index: 1 });
+  await expect(page.getByLabel("Número de partido")).toHaveValue("1");
+  await page.getByRole("button", { name: "Crear partido" }).click();
+  await expect(page.getByText("Partido registrado", { exact: true })).toBeVisible();
+  const linkedMatch = await page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").matches[0]);
+  expect(linkedMatch.officialMatchId).toBe("2026:USALATQ:qual:0:1");
+  expect([linkedMatch.season, linkedMatch.eventCode, linkedMatch.tournamentLevel]).toEqual([2026, "USALATQ", "qual"]);
+  expect(linkedMatch.teams).toEqual(["101", "102", "202", "203"]);
 });
 
 test("validates imports, previews without saving, detects conflicts, exports, and confirms reset", async ({ page }) => {

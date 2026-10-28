@@ -26,9 +26,13 @@ export type OfficialMatch = {
   redFinal: number | null;
   redAuto: number | null;
   redFoul: number | null;
+  redDriveControlled: number | null;
+  redEndgame: number | null;
   blueFinal: number | null;
   blueAuto: number | null;
   blueFoul: number | null;
+  blueDriveControlled: number | null;
+  blueEndgame: number | null;
   status: "scheduled" | "result_pending" | "played";
 };
 
@@ -75,8 +79,8 @@ export function normalizeHybridSchedule(payload: unknown, season: number, eventC
       id: `${season}:${eventCode.toUpperCase()}:${level}:${series ?? 0}:${number}`,
       level, series, number, description: str(row.description), startTime: str(row.startTime), actualStartTime,
       postResultTime: str(row.postResultTime), redTeams: allianceTeams("red"), blueTeams: allianceTeams("blue"),
-      redFinal, redAuto: num(row.scoreRedAuto), redFoul: num(row.scoreRedFoul),
-      blueFinal, blueAuto: num(row.scoreBlueAuto), blueFoul: num(row.scoreBlueFoul), status,
+      redFinal, redAuto: num(row.scoreRedAuto), redFoul: num(row.scoreRedFoul), redDriveControlled: num(row.scoreRedDriveControlled), redEndgame: num(row.scoreRedEndgame),
+      blueFinal, blueAuto: num(row.scoreBlueAuto), blueFoul: num(row.scoreBlueFoul), blueDriveControlled: num(row.scoreBlueDriveControlled), blueEndgame: num(row.scoreBlueEndgame), status,
     } satisfies OfficialMatch];
   });
 }
@@ -92,7 +96,9 @@ export function mergeOfficialMatches(previous: OfficialMatch[], updated: Officia
       actualStartTime: match.actualStartTime ?? old.actualStartTime, postResultTime: match.postResultTime ?? old.postResultTime,
       redTeams: match.redTeams.length ? match.redTeams : old.redTeams, blueTeams: match.blueTeams.length ? match.blueTeams : old.blueTeams,
       redFinal: match.redFinal ?? old.redFinal, redAuto: match.redAuto ?? old.redAuto, redFoul: match.redFoul ?? old.redFoul,
+      redDriveControlled: match.redDriveControlled ?? old.redDriveControlled, redEndgame: match.redEndgame ?? old.redEndgame,
       blueFinal: match.blueFinal ?? old.blueFinal, blueAuto: match.blueAuto ?? old.blueAuto, blueFoul: match.blueFoul ?? old.blueFoul,
+      blueDriveControlled: match.blueDriveControlled ?? old.blueDriveControlled, blueEndgame: match.blueEndgame ?? old.blueEndgame,
       status: match.redFinal !== null && match.blueFinal !== null ? "played" : old.status,
     });
   }

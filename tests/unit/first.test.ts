@@ -22,10 +22,12 @@ test("distinguishes scheduled, pending and zero-point official match results", (
   const normalized = normalizeHybridSchedule({ schedule: [
     { matchNumber: 1, tournamentLevel: "qual", startTime: "2027-01-01T10:00:00", teams: [{ station: "Red1", teamNumber: 1 }, { station: "Blue1", teamNumber: 2 }] },
     { matchNumber: 2, actualStartTime: "2027-01-01T11:00:00", teams: [] },
-    { matchNumber: 3, scoreRedFinal: 0, scoreBlueFinal: 0, scoreRedAuto: 0, scoreBlueAuto: 0, scoreRedFoul: 0, scoreBlueFoul: 0, teams: [] },
+    { matchNumber: 3, tournamentLevel: "qual", scoreRedFinal: 0, scoreBlueFinal: 0, scoreRedAuto: 0, scoreBlueAuto: 0, scoreRedFoul: 0, scoreBlueFoul: 0, scoreRedDriveControlled: 0, scoreBlueDriveControlled: 0, teams: [] },
   ] }, 2027, "MABOS", "qual");
   assert.deepEqual(normalized.map(match => match.status), ["scheduled", "result_pending", "played"]);
   assert.equal(normalized[2].redFinal, 0);
+  assert.equal(normalized[2].redDriveControlled, 0);
+  assert.equal(normalized[2].blueDriveControlled, 0);
   assert.equal(normalized[0].redFinal, null);
   assert.deepEqual(normalized[0].redTeams.map(team => team.number), [1]);
 });
@@ -39,4 +41,12 @@ test("merges official updates by stable ID and retains fields missing from a lat
   assert.equal(updated[0].redAuto, 3);
   assert.deepEqual(updated[0].redTeams.map(team => team.number), [101]);
   assert.notEqual(first.id, normalizeHybridSchedule({ schedule: [{ matchNumber: 4 }] }, 2026, "MABOS", "qual")[0].id);
+});
+
+test("scopes official match identity by season, event, tournament level and official match identifiers", () => {
+  const qual = normalizeHybridSchedule({ schedule: [{ series: 2, matchNumber: 4, teams: [] }] }, 2026, "USALATQ", "qual")[0];
+  const playoff = normalizeHybridSchedule({ schedule: [{ series: 2, matchNumber: 4, teams: [] }] }, 2026, "USALATQ", "playoff")[0];
+  const nextSeason = normalizeHybridSchedule({ schedule: [{ series: 2, matchNumber: 4, teams: [] }] }, 2027, "USALATQ", "qual")[0];
+  const nextEvent = normalizeHybridSchedule({ schedule: [{ series: 2, matchNumber: 4, teams: [] }] }, 2026, "OTHER", "qual")[0];
+  assert.equal(new Set([qual.id, playoff.id, nextSeason.id, nextEvent.id]).size, 4);
 });
