@@ -50,3 +50,14 @@ test("scopes official match identity by season, event, tournament level and offi
   const nextEvent = normalizeHybridSchedule({ schedule: [{ series: 2, matchNumber: 4, teams: [] }] }, 2026, "OTHER", "qual")[0];
   assert.equal(new Set([qual.id, playoff.id, nextSeason.id, nextEvent.id]).size, 4);
 });
+
+test("deduplicates repeated FIRST schedule rows with the same stable match identity", () => {
+  const matches = normalizeHybridSchedule({ schedule: [
+    { series: 0, matchNumber: 1, teams: [{ station: "Red1", teamNumber: 101 }] },
+    { series: 0, matchNumber: 1, scoreRedFinal: 20, scoreBlueFinal: 18, teams: [{ station: "Red1", teamNumber: 101 }, { station: "Blue1", teamNumber: 202 }] },
+  ] }, 2026, "USALATQ", "qual");
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].status, "played");
+  assert.equal(matches[0].redFinal, 20);
+  assert.deepEqual(matches[0].blueTeams.map(team => team.number), [202]);
+});

@@ -28,6 +28,16 @@ export function validateImportData(value: unknown): AppData {
       mechanical: String(raw.mechanical ?? ""), notes: String(raw.notes ?? ""),
       status: (raw.status ?? "pending") as Team["status"],
       createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date(0).toISOString(),
+      updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : undefined,
+      officialName: typeof raw.officialName === "string" ? raw.officialName : undefined,
+      source: ["manual", "first_imported", "mixed"].includes(String(raw.source)) ? raw.source as Team["source"] : "manual",
+      officialAssociations: Array.isArray(raw.officialAssociations) ? raw.officialAssociations.flatMap(item => {
+        if (!isRecord(item) || !Number.isInteger(item.season) || typeof item.eventCode !== "string") return [];
+        return [{ season: Number(item.season), eventCode: item.eventCode.toUpperCase() }];
+      }) : [],
+      capabilitiesSource: ["team_reported", "scout_observed", "unknown"].includes(String(raw.capabilitiesSource)) ? raw.capabilitiesSource as Team["capabilitiesSource"] : undefined,
+      autonomousSource: ["team_reported", "scout_observed", "unknown"].includes(String(raw.autonomousSource)) ? raw.autonomousSource as Team["autonomousSource"] : undefined,
+      mechanicalSource: ["team_reported", "scout_observed", "unknown"].includes(String(raw.mechanicalSource)) ? raw.mechanicalSource as Team["mechanicalSource"] : undefined,
     };
   });
   if (new Set(teams.map(team => team.number)).size !== teams.length || new Set(teams.map(team => team.id)).size !== teams.length) {
@@ -44,7 +54,14 @@ export function validateImportData(value: unknown): AppData {
       throw new Error(`El partido ${index + 1} tiene datos inválidos o equipos sin registrar.`);
     }
     if (raw.eventType !== undefined && !isEventType(raw.eventType)) throw new Error(`El partido ${index + 1} tiene un tipo de evento inválido.`);
-    return { id: raw.id, number: Number(raw.number), event: raw.event.trim(), eventType: isEventType(raw.eventType) ? raw.eventType : "not_configured", teams: raw.teams as Match["teams"], createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date(0).toISOString() };
+    return {
+      id: raw.id, number: Number(raw.number), event: raw.event.trim(), eventType: isEventType(raw.eventType) ? raw.eventType : "not_configured",
+      teams: raw.teams as Match["teams"], createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date(0).toISOString(),
+      season: Number.isInteger(raw.season) ? Number(raw.season) : undefined,
+      eventCode: typeof raw.eventCode === "string" ? raw.eventCode.toUpperCase() : undefined,
+      tournamentLevel: raw.tournamentLevel === "qual" || raw.tournamentLevel === "playoff" ? raw.tournamentLevel : undefined,
+      officialMatchId: typeof raw.officialMatchId === "string" ? raw.officialMatchId : undefined,
+    };
   });
   if (new Set(matches.map(match => match.id)).size !== matches.length ||
     new Set(matches.map(match => `${match.event.toLocaleLowerCase()}::${match.number}`)).size !== matches.length) {

@@ -2,6 +2,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CalendarDays, RefreshCw, Search } from "lucide-react";
 import { OfficialEvent, OfficialMatch, mergeOfficialMatches, normalizeHybridSchedule } from "@/lib/first/normalize";
+import { normalizeOfficialTeams, previewTeamImport, type OfficialTeam, type TeamImportPreview } from "@/lib/first/team-import";
+import { readData } from "@/lib/persistence";
 
 type Level = "qual" | "playoff";
 type ScheduleCache = { matches: OfficialMatch[]; syncedAt: string; lastModified: string | null; scoreDetails?: unknown[] };
@@ -27,6 +29,9 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
   const [events, setEvents] = useState<OfficialEvent[]>([]);
   const [eventDetail, setEventDetail] = useState<{ code: string; event: OfficialEvent } | null>(null);
   const [eventTeams, setEventTeams] = useState<Record<string, unknown>[]>([]);
+  const [importPreview, setImportPreview] = useState<TeamImportPreview[]>([]);
+  const [selectedImportNumbers, setSelectedImportNumbers] = useState<number[]>([]);
+  const [importSummary, setImportSummary] = useState("");
   const [eventPage, setEventPage] = useState(0);
   const [eventsSeason, setEventsSeason] = useState<number | null>(null);
   const [eventCode, setEventCode] = useState("");
@@ -39,7 +44,9 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
   const scope = "local";
   const selectedEvent = eventDetail?.code === eventCode.toUpperCase() ? eventDetail.event : eventsSeason === season ? events.find(event => event.code.toUpperCase() === eventCode.toUpperCase()) : undefined;
   const currentCache = store.schedules[scheduleKey(season, eventCode, level)];
-  const visibleMatches = (currentCache?.matches ?? []).filter(match => mode !== "results" || match.status === "played");
+  const visibleMatches = Array.from(new Map((currentCache?.matches ?? [])
+    .filter(match => mode !== "results" || match.status === "played")
+    .map(match => [match.id, match])).values());
   const filteredEvents = useMemo(() => (eventsSeason === season ? events : []).filter(event => `${event.name} ${event.code} ${event.city ?? ""} ${event.stateProv ?? ""} ${event.venue ?? ""}`.toLowerCase().includes(search.toLowerCase())), [events, eventsSeason, search, season]);
   const pageSize = 60;
   const visibleEvents = filteredEvents.slice(eventPage * pageSize, (eventPage + 1) * pageSize);
@@ -111,7 +118,49 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
 
   function updateSelection(nextSeason: number, nextCode: string) {
     setSeason(nextSeason); setEventCode(nextCode); setMessage("");
+    setImportPreview([]);
+    setSelectedImportNumbers([]);
+    setImportSummary("");
     setStore(value => ({ ...value, selections: { ...value.selections, [scope]: { season: nextSeason, eventCode: nextCode } } }));
+  }
+
+  useEffect(() => {
+    if (!eventCode) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setEventTeams([]);
+      return;
+    }
+    let cancelled = false;
+    void fetch(`/api/first/events/${encodeURIComponent(eventCode)}/teams?season=${season}`, { cache: "no-store" }).then(async response => {
+      const payload = await response.json();
+      if (!cancelled && response.ok) setEventTeams(normalizeOfficialTeams(payload).map(team => ({ teamNumber: team.number, nameFull: team.name })) as Record<string, unknown>[]);
+      else if (!cancelled) setEventTeams([]);
+    }).catch(() => { if (!cancelled) setEventTeams([]); });
+    return () => { cancelled = true; };
+  }, [eventCode, season]);
+
+  function openTeamImportPreview() {
+    if (!eventCode || !eventTeams.length) return;
+    const teams: OfficialTeam[] = normalizeOfficialTeams({ teams: eventTeams.map(team => ({ teamNumber: team.teamNumber, nameFull: team.nameFull })) });
+    const preview = previewTeamImport(readData(), teams, season, eventCode);
+    setImportPreview(preview);
+    setSelectedImportNumbers(preview.map(team => team.number));
+    setImportSummary("");
+  }
+
+  function confirmTeamImport() {
+    if (!eventCode || !importPreview.length) return;
+    const teams: OfficialTeam[] = normalizeOfficialTeams({ teams: eventTeams.map(team => ({ teamNumber: team.teamNumber, nameFull: team.nameFull })) });
+    window.dispatchEvent(new CustomEvent("biobuzz:import-first-teams", {
+      detail: { teams, season, eventCode, selectedNumbers: selectedImportNumbers },
+    }));
+    const preview = previewTeamImport(readData(), teams, season, eventCode);
+    const selected = new Set(selectedImportNumbers);
+    const newTeams = preview.filter(team => selected.has(team.number) && team.state === "new").length;
+    const updated = preview.filter(team => selected.has(team.number) && team.state === "updated").length;
+    const existing = preview.filter(team => selected.has(team.number) && team.state === "existing").length;
+    setImportSummary(`${newTeams} nuevos · ${updated} actualizados · ${existing} ya existían`);
+    setImportPreview([]);
   }
 
   async function refreshSchedule() {
@@ -157,13 +206,14 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
       {filteredEvents.length > pageSize && <div className="official-schedule-tools"><span>Mostrando {eventPage * pageSize + 1}–{Math.min((eventPage + 1) * pageSize, filteredEvents.length)} de {filteredEvents.length} eventos</span><button className="button button-secondary" disabled={eventPage === 0} onClick={() => setEventPage(value => value - 1)}>Anterior</button><button className="button button-secondary" disabled={(eventPage + 1) * pageSize >= filteredEvents.length} onClick={() => setEventPage(value => value + 1)}>Siguiente</button></div>}
       {eventsSeason === season && events.length > 0 && filteredEvents.length === 0 && <p className="official-attribution">Ningún evento de esta temporada coincide con la búsqueda.</p>}
       {selectedEvent && <div className="official-event-card"><div className="official-event-icon"><CalendarDays size={19}/></div><div><b>{selectedEvent.name}</b><span>{[selectedEvent.code, selectedEvent.venue, selectedEvent.city, selectedEvent.stateProv, selectedEvent.country].filter(Boolean).join(" · ")}</span><span>{[selectedEvent.dateStart && dateText(selectedEvent.dateStart), selectedEvent.dateEnd && dateText(selectedEvent.dateEnd)].filter(Boolean).join(" – ") || "Fechas no incluidas en la respuesta de FIRST"}</span></div><span className="official-badge">OFICIAL · FIRST</span></div>}
+      {eventCode && eventTeams.length > 0 && <section className="panel official-team-import"><div className="panel-head"><div><h2>Equipos participantes de FIRST</h2><p>{eventTeams.length} equipos publicados para este evento.</p></div><button className="button button-primary" onClick={openTeamImportPreview}>Vista previa e importar equipos</button></div>{importSummary && <div className="official-message"><span>{importSummary}</span></div>}{importPreview.length > 0 && <div className="official-team-preview"><div className="official-schedule-tools"><button className="button button-secondary" onClick={() => setSelectedImportNumbers(importPreview.map(team => team.number))}>Seleccionar todos</button><span>{selectedImportNumbers.length} de {importPreview.length} seleccionados</span></div><div className="table-wrap"><table><thead><tr><th>Importar</th><th>Equipo</th><th>Nombre FIRST</th><th>Estado</th></tr></thead><tbody>{importPreview.map(team => <tr key={team.number}><td><input aria-label={`Importar equipo ${team.number}`} type="checkbox" checked={selectedImportNumbers.includes(team.number)} onChange={event => setSelectedImportNumbers(values => event.target.checked ? [...values, team.number] : values.filter(number => number !== team.number))}/></td><td>{team.number}</td><td>{team.name}</td><td>{team.state === "new" ? "Nuevo" : team.state === "updated" ? "Actualizar datos oficiales" : "Ya existe"}</td></tr>)}</tbody></table></div><button className="button button-primary" disabled={!selectedImportNumbers.length} onClick={confirmTeamImport}>Confirmar importación</button></div>}</section>}
       {eventCode && mode !== "events" && <div className="official-schedule-tools"><label className="field"><span className="field-label">Nivel de torneo</span><select value={level} onChange={event => setLevel(event.target.value as Level)}><option value="qual">Clasificación (qual)</option><option value="playoff">Eliminatorias (playoff)</option></select></label><button className="button button-primary" onClick={() => void refreshSchedule()} disabled={busySchedule}><RefreshCw size={15} className={busySchedule ? "spin" : ""}/> {busySchedule ? "Actualizando calendario…" : mode === "schedule" ? "Actualizar calendario FIRST" : "Actualizar resultados FIRST"}</button><span>{selectionStatus}</span></div>}
       {message && <div className="official-message" role="status">{message.includes("FIRST") || message.includes("fall") || message.includes("Fall") ? <AlertTriangle size={15}/> : <CalendarDays size={15}/>}<span>{message}</span></div>}
       <p className="official-attribution">Fuente: <a href="https://ftc-events.firstinspires.org/services/API" target="_blank" rel="noreferrer">FTC Events API de FIRST</a>. <a href="https://ftc-events.firstinspires.org/services/API/register" target="_blank" rel="noreferrer">Solicitar credenciales API</a>. FIRST publica resultados una vez que los eventos concluyen y sus sistemas sincronizan los datos; esta consulta no garantiza información en tiempo real.</p>
     </section>
     {eventCode && mode !== "events" && eventTeams.length > 0 && <section className="panel official-matches"><div className="panel-head"><div><h2>Teams participantes</h2><p>Equipos oficiales asociados a {selectedEvent?.name ?? eventCode}</p></div><span className="count-chip">{eventTeams.length}</span></div><div className="official-attribution">{eventTeams.map(team => `${String(team.teamNumber ?? "")}${team.nameFull || team.nameShort || team.teamName ? ` · ${String(team.nameFull ?? team.nameShort ?? team.teamName)}` : ""}`).filter(Boolean).join("  /  ")}</div></section>}
     {eventCode && mode !== "events" && <section className="panel official-matches"><div className="panel-head"><div><h2>{selectedEvent?.name ?? `Evento ${eventCode}`}</h2><p>{mode === "results" ? "Resultados oficiales publicados" : level === "qual" ? "Partidos de clasificación" : "Partidos de eliminatorias"} · {visibleMatches.length} {mode === "results" ? "con resultado" : "recibidos"}</p></div><span className="official-updated">Última consulta correcta: {lastUpdate ?? "aún no descargado"}</span></div>
-      {!currentCache ? <div className="official-empty">Pulsa “Actualizar desde FIRST” para obtener el calendario y los resultados publicados.</div> : visibleMatches.length ? <div className="official-match-list">{visibleMatches.map(match => { const details = currentCache.scoreDetails?.filter(item => item && typeof item === "object" && Number((item as Record<string, unknown>).matchNumber) === match.number) ?? []; return <article className="official-match" key={match.id}><div className="official-match-title"><b>{match.description || `${match.level.toUpperCase()} · Partido ${match.number}`}</b><span>{match.status === "played" ? "Disputado · resultado oficial" : match.status === "result_pending" ? "Iniciado · resultado pendiente de publicación" : "Programado · sin resultado"}</span><small>{dateText(match.actualStartTime ?? match.startTime) ?? "Hora no publicada"}</small></div><div className="official-alliance red"><b>ROJO</b><span>{teamList(match.redTeams)}</span><strong>{officialPoints(match.redFinal)}</strong></div><div className="official-alliance blue"><b>AZUL</b><span>{teamList(match.blueTeams)}</span><strong>{officialPoints(match.blueFinal)}</strong></div>{match.status === "played" && <div className="official-score-details"><span>AUTO Rojo: {officialPoints(match.redAuto)}</span><span>TELEOP Rojo: {officialPoints(match.redDriveControlled)}</span><span>Faltas Rojo: {officialPoints(match.redFoul)}</span><span>Endgame Rojo: {officialPoints(match.redEndgame)}</span><span>AUTO Azul: {officialPoints(match.blueAuto)}</span><span>TELEOP Azul: {officialPoints(match.blueDriveControlled)}</span><span>Faltas Azul: {officialPoints(match.blueFoul)}</span><span>Endgame Azul: {officialPoints(match.blueEndgame)}</span></div>}{details.length > 0 && <details className="official-score-details"><summary>Detalles de scoring publicados por FIRST</summary><pre>{JSON.stringify(details, null, 2)}</pre></details>}</article>; })}</div> : <div className="official-empty">{mode === "results" ? "FIRST no ha publicado resultados para este evento y nivel." : "FIRST devolvió un calendario vacío para este nivel."}</div>}
+      {!currentCache ? <div className="official-empty">Pulsa “Actualizar desde FIRST” para obtener el calendario y los resultados publicados.</div> : visibleMatches.length ? <div className="official-match-list">{visibleMatches.map((match, index) => { const details = currentCache.scoreDetails?.filter(item => item && typeof item === "object" && Number((item as Record<string, unknown>).matchNumber) === match.number) ?? []; return <article className="official-match" key={`${match.id}:${index}`}><div className="official-match-title"><b>{match.description || `${match.level.toUpperCase()} · Partido ${match.number}`}</b><span>{match.status === "played" ? "Disputado · resultado oficial" : match.status === "result_pending" ? "Iniciado · resultado pendiente de publicación" : "Programado · sin resultado"}</span><small>{dateText(match.actualStartTime ?? match.startTime) ?? "Hora no publicada"}</small></div><div className="official-alliance red"><b>ROJO</b><span>{teamList(match.redTeams)}</span><strong>{officialPoints(match.redFinal)}</strong></div><div className="official-alliance blue"><b>AZUL</b><span>{teamList(match.blueTeams)}</span><strong>{officialPoints(match.blueFinal)}</strong></div>{match.status === "played" && <div className="official-score-details"><span>AUTO Rojo: {officialPoints(match.redAuto)}</span><span>TELEOP Rojo: {officialPoints(match.redDriveControlled)}</span><span>Faltas Rojo: {officialPoints(match.redFoul)}</span><span>Endgame Rojo: {officialPoints(match.redEndgame)}</span><span>AUTO Azul: {officialPoints(match.blueAuto)}</span><span>TELEOP Azul: {officialPoints(match.blueDriveControlled)}</span><span>Faltas Azul: {officialPoints(match.blueFoul)}</span><span>Endgame Azul: {officialPoints(match.blueEndgame)}</span></div>}{details.length > 0 && <details className="official-score-details"><summary>Detalles de scoring publicados por FIRST</summary><pre>{JSON.stringify(details, null, 2)}</pre></details>}</article>; })}</div> : <div className="official-empty">{mode === "results" ? "FIRST no ha publicado resultados para este evento y nivel." : "FIRST devolvió un calendario vacío para este nivel."}</div>}
     </section>}
   </>;
 }

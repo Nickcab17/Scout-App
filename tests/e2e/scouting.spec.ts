@@ -144,6 +144,17 @@ test("searches and selects a FIRST event, then displays its scheduled match and 
   await expect(page.getByRole("heading", { name: "Events" })).toBeVisible();
   await page.getByPlaceholder("Nombre, ubicación o código").fill("Athens");
   await page.locator(".official-event-select select").selectOption("USALATQ");
+  await expect(page.getByRole("button", { name: "Vista previa e importar equipos" })).toBeVisible();
+  await page.getByRole("button", { name: "Vista previa e importar equipos" }).click();
+  await expect(page.getByRole("button", { name: "Confirmar importación" })).toBeVisible();
+  await page.getByRole("button", { name: "Confirmar importación" }).click();
+  await expect(page.getByText(/1 nuevos · 0 actualizados · 0 ya existían/)).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "Teams" }).click();
+  await expect(page.getByText("101 · Red Team")).toBeVisible();
+  await page.getByRole("button", { name: "Events" }).click();
+  await page.getByPlaceholder("Nombre, ubicación o código").fill("Athens");
+  await page.locator(".official-event-select select").selectOption("USALATQ");
   await expect(page.getByText("Athens High School · Athens · Alabama · USA")).toBeVisible();
   await page.getByRole("button", { name: "Match Schedule" }).click();
   await expect(page.getByRole("heading", { name: "Match Schedule" })).toBeVisible();
@@ -213,4 +224,45 @@ test("validates imports, previews without saving, detects conflicts, exports, an
   await expect(page.getByText("Datos locales eliminados")).toBeVisible();
   saved = await page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").teams);
   expect(saved).toHaveLength(0);
+});
+
+test("Analytics and Alliance Selection use confirmed local records and preserve alliance scenarios", async ({ page }) => {
+  const scoring = {
+    auto: { leave: true, park: false, hiveTips: 2 },
+    teleop: { park: true, hiveTips: 3, cells: { pollen: 4, nectar: 1 }, flowers: { pollen: 2, nectar: 0 }, bottomNectarBonusFlowers: 1, gardens: { pollen: 1, nectar: 0 } },
+  };
+  await page.evaluate(({ scoring }) => {
+    const teams = [
+      { id: "a", number: 101, name: "Equipo A", capabilities: "Ciclo verificable", autonomous: "Leave", mechanical: "HIVE TIP", notes: "", status: "verified", createdAt: "2026-11-08" },
+      { id: "b", number: 202, name: "Equipo B", capabilities: "Defensa", autonomous: "Leave", mechanical: "Park", notes: "", status: "observed", createdAt: "2026-11-08" },
+      { id: "c", number: 303, name: "Equipo C", capabilities: "Garden", autonomous: "", mechanical: "", notes: "", status: "pending", createdAt: "2026-11-08" },
+    ];
+    const matches = [{ id: "m1", number: 1, event: "Evento REAL A", eventCode: "AUBRQ1", season: 2026, eventType: "all_other_events", teams: ["101", "202", "303", "404"], createdAt: "2026-11-08" }];
+    const observations = teams.map((team, index) => ({
+      id: `o${index + 1}`, matchId: "m1", teamNumber: team.number, status: "submitted",
+      auto: "AUTO observado", teleop: "TeleOp observado", hiveTip: "", pollen: "", nectar: "", flowerGarden: "", leavePark: "",
+      issues: "", notes: "Observación E2E", updatedAt: "2026-11-08", scoring, scoringConfirmed: true,
+    }));
+    localStorage.setItem("biobuzz-scout-v1", JSON.stringify({ teams, matches, observations }));
+  }, { scoring });
+  await page.reload();
+
+  await page.getByRole("button", { name: "Analytics" }).click();
+  await expect(page.getByRole("heading", { name: "Estadísticas por equipo" })).toBeVisible();
+  await page.getByLabel("Evento").selectOption("Evento REAL A");
+  await expect(page.locator(".table-wrap tbody tr")).toHaveCount(3);
+
+  await page.getByRole("button", { name: "Alliance Selection" }).click();
+  await expect(page.getByRole("heading", { name: "Ranking competitivo configurable" })).toBeVisible();
+  await page.getByLabel("Equipo principal").selectOption("101");
+  await page.getByLabel("Socio 1").selectOption("202");
+  await page.getByLabel("Socio 2").selectOption("303");
+  await page.getByLabel("Nombre de escenario").fill("Alianza E2E");
+  await page.getByRole("button", { name: /Guardar escenario/ }).click();
+  await expect(page.getByText("Alianza E2E")).toBeVisible();
+
+  await page.reload();
+  await page.getByRole("button", { name: "Alliance Selection" }).click();
+  await expect(page.getByText("Alianza E2E")).toBeVisible();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-alliance-scenarios-v1") || "[]")[0].teamNumbers)).toEqual([101, 202, 303]);
 });

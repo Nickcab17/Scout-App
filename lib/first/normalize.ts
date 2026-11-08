@@ -59,7 +59,7 @@ export function normalizeEvents(payload: unknown): OfficialEvent[] {
 export function normalizeHybridSchedule(payload: unknown, season: number, eventCode: string, level: "qual" | "playoff"): OfficialMatch[] {
   const rows = obj(payload).schedule;
   if (!Array.isArray(rows)) return [];
-  return rows.flatMap(raw => {
+  const matches = rows.flatMap(raw => {
     const row = obj(raw);
     const number = num(row.matchNumber);
     if (number === null) return [];
@@ -83,6 +83,27 @@ export function normalizeHybridSchedule(payload: unknown, season: number, eventC
       blueFinal, blueAuto: num(row.scoreBlueAuto), blueFoul: num(row.scoreBlueFoul), blueDriveControlled: num(row.scoreBlueDriveControlled), blueEndgame: num(row.scoreBlueEndgame), status,
     } satisfies OfficialMatch];
   });
+  const byId = new Map<string, OfficialMatch>();
+  for (const match of matches) {
+    const previous = byId.get(match.id);
+    if (!previous) {
+      byId.set(match.id, match);
+      continue;
+    }
+    byId.set(match.id, {
+      ...previous,
+      ...match,
+      description: match.description ?? previous.description,
+      startTime: match.startTime ?? previous.startTime,
+      actualStartTime: match.actualStartTime ?? previous.actualStartTime,
+      redTeams: match.redTeams.length ? match.redTeams : previous.redTeams,
+      blueTeams: match.blueTeams.length ? match.blueTeams : previous.blueTeams,
+      redFinal: match.redFinal ?? previous.redFinal,
+      blueFinal: match.blueFinal ?? previous.blueFinal,
+      status: match.redFinal !== null && match.blueFinal !== null ? "played" : previous.status,
+    });
+  }
+  return [...byId.values()].sort((a, b) => a.level.localeCompare(b.level) || ((a.series ?? 0) - (b.series ?? 0)) || a.number - b.number);
 }
 
 export function mergeOfficialMatches(previous: OfficialMatch[], updated: OfficialMatch[]): OfficialMatch[] {
