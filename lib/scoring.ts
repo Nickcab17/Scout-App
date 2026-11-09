@@ -1,3 +1,5 @@
+import type { AllianceFinalState, MatchActions } from "./types";
+
 /**
  * BIOBUZZ scoring estimate based on the official 2026-27 Competition Manual TU06.
  * Results from this module are scouting estimates, never official event scores.
@@ -136,3 +138,46 @@ export function compareEstimateToOfficial(estimatedPoints: number, officialPoint
 }
 
 export function estimateScore(): null { return null; }
+
+export type ExtendedEstimateBreakdown = {
+  autoPoints: number;
+  teleopPoints: number;
+  endGamePoints: number;
+  individualPoints: number;
+  allianceFinalPoints: number;
+  totalTips: number;
+  ruleVersion: string;
+  estimated: true;
+};
+
+export function calculateExtendedEstimate(actions: MatchActions, alliance?: AllianceFinalState): ExtendedEstimateBreakdown {
+  const p = BIOBUZZ_RULES.points;
+  const autoPoints = (actions.auto.leave ? p.leaveAuto : 0) +
+    (actions.auto.park ? p.parkAuto : 0) +
+    actions.auto.hiveTips * p.hiveTip;
+  const teleopPoints = actions.teleop.hiveTips * p.hiveTip;
+  const endGamePoints = (actions.endGame.park ? p.parkTeleop : 0) +
+    actions.endGame.hiveTips * p.hiveTip;
+  let allianceFinalPoints = 0;
+  if (alliance) {
+    allianceFinalPoints += (alliance.cells.pollen + alliance.cells.nectar) * p.cellElement;
+    allianceFinalPoints += alliance.gardens.pollen + alliance.gardens.nectar;
+    allianceFinalPoints += alliance.bottomNectarBonusFlowers * p.bottomNectarBonus;
+    alliance.flowerOwners.forEach((owner, index) => {
+      if (!owner) return;
+      const flower = alliance.flowersFinal[index];
+      allianceFinalPoints += (flower.pollen + flower.nectar) * p.flowerElement;
+    });
+  }
+  const totalTips = actions.auto.hiveTips + actions.teleop.hiveTips + actions.endGame.hiveTips;
+  return {
+    autoPoints,
+    teleopPoints,
+    endGamePoints,
+    individualPoints: autoPoints + teleopPoints + endGamePoints,
+    allianceFinalPoints,
+    totalTips,
+    ruleVersion: BIOBUZZ_RULES.version,
+    estimated: true,
+  };
+}

@@ -1,5 +1,5 @@
 import type { AppData, Match, Observation, Team } from "./types.ts";
-import { calculateRobotScore, type ScoreBreakdown } from "./scoring.ts";
+import { calculateExtendedEstimate, calculateRobotScore, type ScoreBreakdown } from "./scoring.ts";
 
 export type AnalyticsFilters = {
   season: string;
@@ -58,12 +58,32 @@ function matchEvent(match: Match | undefined): string {
 export function filterConfirmedRecords(data: AppData, filters: Partial<AnalyticsFilters> = {}): ConfirmedRecord[] {
   const active = { ...defaultAnalyticsFilters, ...filters };
   const records = data.observations.flatMap(observation => {
-    if (!observation.scoringConfirmed || !observation.scoring) return [];
+    let score: ScoreBreakdown;
+    if (observation.actions) {
+      const extended = calculateExtendedEstimate(observation.actions, observation.allianceFinal);
+      score = {
+        autoPoints: extended.autoPoints,
+        teleopPoints: extended.teleopPoints + extended.endGamePoints,
+        totalMatchPoints: extended.individualPoints,
+        totalTips: extended.totalTips,
+        cellPoints: observation.allianceFinal ? (observation.allianceFinal.cells.pollen + observation.allianceFinal.cells.nectar) * 2 : 0,
+        flowerPoints: 0,
+        gardenPoints: observation.allianceFinal ? observation.allianceFinal.gardens.pollen + observation.allianceFinal.gardens.nectar : 0,
+        bonusPoints: observation.allianceFinal ? observation.allianceFinal.bottomNectarBonusFlowers * 5 : 0,
+        penaltyPoints: null,
+        estimated: true,
+        ruleVersion: extended.ruleVersion,
+        poolPoints: null,
+      };
+    } else {
+      if (!observation.scoringConfirmed || !observation.scoring) return [];
+      score = calculateRobotScore(observation.scoring);
+    }
     const match = data.matches.find(item => item.id === observation.matchId);
     if (active.team !== "all" && String(observation.teamNumber) !== active.team) return [];
     if (active.season !== "all" && matchSeason(match, observation) !== active.season) return [];
     if (active.event !== "all" && matchEvent(match) !== active.event) return [];
-    return [{ observation, match, score: calculateRobotScore(observation.scoring) }];
+    return [{ observation, match, score }];
   });
   records.sort((a, b) => (a.match?.number || 0) - (b.match?.number || 0));
   if (active.period !== "all") return records.slice(-Number(active.period));
@@ -77,7 +97,7 @@ export function countIncompleteRecords(data: AppData, filters: Partial<Analytics
     if (active.team !== "all" && String(observation.teamNumber) !== active.team) return false;
     if (active.season !== "all" && matchSeason(match, observation) !== active.season) return false;
     if (active.event !== "all" && matchEvent(match) !== active.event) return false;
-    return !observation.scoringConfirmed || !observation.scoring;
+    return !observation.actions && (!observation.scoringConfirmed || !observation.scoring);
   }).length;
 }
 

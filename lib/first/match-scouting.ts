@@ -1,4 +1,4 @@
-import type { Match, Observation } from "../types";
+import type { Match, MatchActions, Observation } from "../types";
 
 export type FirstRobotMatch = {
   id: string;
@@ -23,7 +23,16 @@ export function findRobotAlliance(match: FirstRobotMatch, teamNumber: number): "
   return null;
 }
 
-export function buildFirstMatchAndObservation(match: FirstRobotMatch, teamNumber: number, pollenCount: number, current: { matches: Match[]; observations: Observation[] }) {
+export function emptyMatchActions(pollenCount = 0): MatchActions {
+  const flower = () => ({ pollen: 0, nectar: 0 });
+  return {
+    auto: { leave: false, park: false, hiveTips: 0, pollenLaunchedCell: 0, nectarLaunchedCell: 0 },
+    teleop: { hiveTips: 0, pollenLaunchedCell: pollenCount, nectarLaunchedCell: 0, pollenFromFlowers: 0, nectarFromFlowers: 0, flowers: [flower(), flower(), flower(), flower()], gardens: { pollen: 0, nectar: 0 } },
+    endGame: { park: false, hiveTips: 0, flowers: [flower(), flower(), flower(), flower()], cells: { pollen: 0, nectar: 0 }, gardens: { pollen: 0, nectar: 0 }, flowersFinal: [flower(), flower(), flower(), flower()] },
+  };
+}
+
+export function buildFirstMatchAndObservation(match: FirstRobotMatch, teamNumber: number, pollenCount: number, current: { matches: Match[]; observations: Observation[] }, actions?: MatchActions) {
   if (!Number.isSafeInteger(pollenCount) || pollenCount < 0) throw new RangeError("El polen debe ser un entero mayor o igual que cero.");
   const alliance = findRobotAlliance(match, teamNumber);
   if (!alliance) throw new Error("FIRST no proporcionó este robot en las alianzas del partido.");
@@ -79,6 +88,8 @@ export function buildFirstMatchAndObservation(match: FirstRobotMatch, teamNumber
     eventCode: match.eventCode,
     tournamentLevel: match.level,
     officialMatchId: match.id,
+    capturedAt: new Date().toISOString(),
+    actions: actions ?? emptyMatchActions(pollenCount),
   };
   return { localMatch, observation };
 }

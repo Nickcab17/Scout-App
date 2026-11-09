@@ -49,13 +49,14 @@ test("uses FIRST match data, records zero pollen, persists locally, and hides ma
   await page.getByLabel("Evento FIRST").selectOption("TEST1");
   await page.getByLabel("Partido oficial").selectOption({ index: 1 });
   await page.getByLabel("Equipo participante observado").selectOption("9102");
-  await page.getByLabel("Cantidad de polen").fill("0");
-  await page.getByRole("button", { name: "Guardar polen" }).click();
+  await page.getByRole("tab", { name: "TELEOP" }).click();
+  await page.getByRole("spinbutton", { name: "POLLEN lanzado hacia CELLS", exact: true }).fill("0");
+  await page.getByRole("button", { name: "Guardar observación" }).click();
   await expect(page.getByText("Guardado localmente")).toBeVisible();
-  await expect(page.getByLabel("Cantidad de polen")).toHaveValue("");
+  await expect(page.getByRole("spinbutton", { name: "POLLEN lanzado hacia CELLS", exact: true })).toHaveValue("0");
 
-  await page.getByLabel("Cantidad de polen").fill("7");
-  await page.getByRole("button", { name: "Guardar polen" }).click();
+  await page.getByRole("spinbutton", { name: "POLLEN lanzado hacia CELLS", exact: true }).fill("7");
+  await page.getByRole("button", { name: "Guardar observación" }).click();
   await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations.length)).toBe(2);
 
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}"));
@@ -75,9 +76,10 @@ test("uses FIRST match data, records zero pollen, persists locally, and hides ma
 
 test("rejects invalid pollen and preserves the submitted count after reload", async ({ page }) => {
   await page.getByRole("button", { name: "Match Scouting" }).click();
-  await page.getByLabel("Cantidad de polen").fill("-1");
-  await expect(page.getByLabel("Cantidad de polen")).toHaveValue("-1");
-  await expect(page.getByRole("button", { name: "Guardar polen" })).toBeDisabled();
+  await page.getByRole("tab", { name: "TELEOP" }).click();
+  await page.getByRole("spinbutton", { name: "POLLEN lanzado hacia CELLS", exact: true }).fill("-1");
+  await expect(page.getByRole("spinbutton", { name: "POLLEN lanzado hacia CELLS", exact: true })).toHaveValue("-1");
+  await expect(page.getByRole("button", { name: "Guardar observación" })).toBeDisabled();
 });
 
 test("applies and remembers appearance preferences in this browser", async ({ page }) => {

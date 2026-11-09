@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BIOBUZZ_RULES, calculateAllianceRankingPoints, calculateRobotScore, compareEstimateToOfficial, emptyRobotScoutingInput, RULE_CONFIGURATIONS } from "../../lib/scoring.ts";
+import { BIOBUZZ_RULES, calculateAllianceRankingPoints, calculateExtendedEstimate, calculateRobotScore, compareEstimateToOfficial, emptyRobotScoutingInput, RULE_CONFIGURATIONS } from "../../lib/scoring.ts";
+import { emptyMatchActions } from "../../lib/first/match-scouting.ts";
 
 test("returns zero points for a confirmed empty record", () => {
   const score = calculateRobotScore(emptyRobotScoutingInput());
@@ -80,6 +81,44 @@ test("uses verified match results for win, tie and loss only", () => {
   assert.equal(calculate(50, 50).winRP, 1);
   assert.equal(calculate(49, 50).winRP, 0);
   assert.equal(calculateEstimateWin().winRP, null);
+});
+
+test("TU08 extended estimate separates individual actions from alliance final state", () => {
+  const actions = emptyMatchActions(0);
+  actions.auto.leave = true;
+  actions.auto.park = true;
+  actions.auto.hiveTips = 1;
+  actions.teleop.hiveTips = 2;
+  actions.endGame.park = true;
+  actions.endGame.hiveTips = 1;
+  const alliance = {
+    cells: { pollen: 2, nectar: 1 },
+    gardens: { pollen: 3, nectar: 2 },
+    flowersFinal: [{ pollen: 1, nectar: 1 }, { pollen: 0, nectar: 0 }, { pollen: 2, nectar: 0 }, { pollen: 0, nectar: 0 }] as const,
+    flowerOwners: ["red", null, "red", null] as const,
+    bottomNectarBonusFlowers: 1,
+  };
+  const score = calculateExtendedEstimate(actions, alliance as never);
+  assert.equal(score.autoPoints, 28);
+  assert.equal(score.teleopPoints, 40);
+  assert.equal(score.endGamePoints, 25);
+  assert.equal(score.individualPoints, 93);
+  assert.equal(score.allianceFinalPoints, 24);
+  assert.equal(score.totalTips, 4);
+});
+
+test("extended estimation does not add alliance final points to a robot individual score", () => {
+  const actions = emptyMatchActions();
+  const alliance = {
+    cells: { pollen: 9, nectar: 9 },
+    gardens: { pollen: 10, nectar: 10 },
+    flowersFinal: [{ pollen: 4, nectar: 4 }, { pollen: 4, nectar: 4 }, { pollen: 4, nectar: 4 }, { pollen: 4, nectar: 4 }] as const,
+    flowerOwners: ["red", "red", "blue", "blue"] as const,
+    bottomNectarBonusFlowers: 4,
+  };
+  const score = calculateExtendedEstimate(actions, alliance as never);
+  assert.equal(score.individualPoints, 0);
+  assert.ok(score.allianceFinalPoints > 0);
 });
 
 function calculateEstimateWin() {
