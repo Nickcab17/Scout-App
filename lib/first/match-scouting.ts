@@ -59,7 +59,7 @@ export function buildFirstMatchAndObservation(match: FirstRobotMatch, teamNumber
     officialMatchId: match.id,
   };
   const observation: Observation = {
-    id: current.observations.find(item => item.matchId === localMatch.id && item.teamNumber === teamNumber)?.id ?? crypto.randomUUID(),
+    id: crypto.randomUUID(),
     matchId: localMatch.id,
     teamNumber,
     status: "submitted",

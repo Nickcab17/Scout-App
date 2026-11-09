@@ -33,8 +33,8 @@ export async function getFirstJson(options: {
   if (previous) memory.set(options.key, previous);
   const credentials = firstCredentials();
   if (!credentials) {
-    if (previous) return { ...previous, stale: true, warning: "FTC Events no está configurado. Se muestra la última descarga correcta; solicita acceso y configura las credenciales en el servidor." };
-    throw new FirstApiError("FTC Events no está configurado. Solicita acceso en ftc-events.firstinspires.org/services/API/register y define FTC_EVENTS_USERNAME y FTC_EVENTS_AUTHORIZATION_KEY en el servidor.", 503);
+    if (previous) return { ...previous, stale: true, warning: "FTC Events no está configurado. Se muestra la última descarga correcta disponible." };
+    throw new FirstApiError("FTC Events no está configurado en el servidor. No se realizó una consulta externa.", 503);
   }
   const age = previous ? Date.now() - Date.parse(previous.syncedAt) : Infinity;
   if (previous && !options.refresh && age < 60_000) return previous;

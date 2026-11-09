@@ -3,18 +3,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CalendarDays, CheckCircle2, RefreshCw, ShieldCheck } from "lucide-react";
 import type { AppData } from "@/lib/types";
-import { normalizeHybridSchedule, type OfficialEvent } from "@/lib/first/normalize";
-import { normalizeOfficialTeams } from "@/lib/first/team-import";
+import { normalizeHybridSchedule, type OfficialEvent, type OfficialMatch } from "@/lib/first/normalize";
+import { normalizeOfficialTeams, type OfficialTeam } from "@/lib/first/team-import";
 import { buildFirstMatchAndObservation, parsePollenCount, type FirstRobotMatch } from "@/lib/first/match-scouting";
+import { writeData } from "@/lib/persistence";
 
 type Props = { data: AppData; setData: (updater: (current: AppData) => AppData) => void };
 
-export default function FirstMatchScouting({ setData }: Props) {
+export default function FirstMatchScouting({ data, setData }: Props) {
   const [season, setSeason] = useState(2026);
   const [seasons, setSeasons] = useState([2026, 2025, 2024, 2023]);
   const [events, setEvents] = useState<OfficialEvent[]>([]);
   const [eventCode, setEventCode] = useState("");
   const [matches, setMatches] = useState<FirstRobotMatch[]>([]);
+  const [eventTeams, setEventTeams] = useState<OfficialTeam[]>([]);
   const [matchId, setMatchId] = useState("");
   const [teamNumber, setTeamNumber] = useState("");
   const [pollen, setPollen] = useState("");
@@ -81,11 +83,19 @@ export default function FirstMatchScouting({ setData }: Props) {
 
       const officialTeams = normalizeOfficialTeams(teamPayload);
       if (!officialTeams.length) throw new Error("FIRST no publicó equipos para este evento. No se inventaron equipos.");
+      setEventTeams(officialTeams);
       window.dispatchEvent(new CustomEvent("biobuzz:import-first-teams", { detail: { teams: officialTeams, season, eventCode: code, selectedNumbers: officialTeams.map(team => team.number) } }));
 
       const combined = new Map<string, FirstRobotMatch>();
-      if (qualResponse.ok) normalizeHybridSchedule(qualPayload, season, code, "qual").forEach(match => combined.set(match.id, { ...match, season, eventCode: code } as FirstRobotMatch));
-      if (playoffResponse.ok) normalizeHybridSchedule(playoffPayload, season, code, "playoff").forEach(match => combined.set(match.id, { ...match, season, eventCode: code } as FirstRobotMatch));
+      const normalizedMatches = (payload: unknown, level: "qual" | "playoff"): OfficialMatch[] => {
+        const rawPayload = payload as { matches?: unknown[] };
+        if (Array.isArray(rawPayload.matches) && rawPayload.matches.every(match => typeof match === "object" && match !== null)) {
+          return rawPayload.matches as OfficialMatch[];
+        }
+        return normalizeHybridSchedule(payload, season, code, level);
+      };
+      if (qualResponse.ok) normalizedMatches(qualPayload, "qual").forEach(match => combined.set(match.id, { ...match, season, eventCode: code } as FirstRobotMatch));
+      if (playoffResponse.ok) normalizedMatches(playoffPayload, "playoff").forEach(match => combined.set(match.id, { ...match, season, eventCode: code } as FirstRobotMatch));
       const officialMatches = [...combined.values()].sort((a, b) => (a.level === b.level ? a.number - b.number : a.level === "qual" ? -1 : 1));
       if (!officialMatches.length) throw new Error("FIRST no publicó partidos oficiales para este evento. No se puede registrar scouting sin alianzas verificadas.");
       setMatches(officialMatches);
@@ -131,17 +141,16 @@ export default function FirstMatchScouting({ setData }: Props) {
     const number = Number(teamNumber);
     if (!teamNumber || !Number.isInteger(number)) { setError("Selecciona el robot observado."); return; }
     try {
-      setData(current => {
-        const result = buildFirstMatchAndObservation(selectedMatch, number, pollenCount, current);
-        const matches = result.localMatch === current.matches.find(match => match.officialMatchId === selectedMatch.id)
-          ? current.matches.map(match => match.officialMatchId === result.localMatch.officialMatchId ? result.localMatch : match)
-          : [...current.matches, result.localMatch];
-        const observations = current.observations.some(item => item.id === result.observation.id)
-          ? current.observations.map(item => item.id === result.observation.id ? result.observation : item)
-          : [...current.observations, result.observation];
-        return { ...current, matches, observations };
-      });
+      const result = buildFirstMatchAndObservation(selectedMatch, number, pollenCount, data);
+      const existingLocalMatch = data.matches.find(match => match.officialMatchId === selectedMatch.id);
+      const nextMatches = existingLocalMatch
+        ? data.matches.map(match => match.id === existingLocalMatch.id ? result.localMatch : match)
+        : [...data.matches, result.localMatch];
+      const next: AppData = { ...data, matches: nextMatches, observations: [...data.observations, result.observation] };
+      writeData(next);
+      setData(() => next);
       setSaved(`Registro guardado: equipo ${number}, alianza ${selectedMatch.redTeams.some(team => team.number === number) ? "roja" : "azul"}, ${pollenCount} polen.`);
+      setPollen("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo guardar el registro.");
     }
@@ -163,7 +172,11 @@ export default function FirstMatchScouting({ setData }: Props) {
             <label className="field"><span>Temporada FIRST</span><select aria-label="Temporada FIRST" value={season} onChange={event => setSeason(Number(event.target.value))}>{seasons.map(year => <option key={year} value={year}>{year}—{year + 1}</option>)}</select></label>
             <label className="field"><span>Evento FIRST</span><select aria-label="Evento FIRST" value={eventCode} onChange={event => selectEvent(event.target.value)}><option value="">Selecciona un evento oficial</option>{events.map(event => <option key={event.code} value={event.code}>{event.code} · {event.name}</option>)}</select></label>
             <label className="field"><span>Partido oficial</span><select aria-label="Partido oficial" value={matchId} onChange={event => { setMatchId(event.target.value); setTeamNumber(""); setSaved(""); }} disabled={!matches.length}><option value="">Selecciona un partido</option>{matches.map(match => <option key={match.id} value={match.id}>{match.level.toUpperCase()} M{match.number}{match.description ? ` · ${match.description}` : ""}</option>)}</select></label>
-            {selectedMatch && <label className="field"><span>Robot observado</span><select aria-label="Robot observado" value={teamNumber} onChange={event => { setTeamNumber(event.target.value); setSaved(""); }}><option value="">Selecciona el robot</option>{robots.map(robot => <option key={`${robot.alliance}-${robot.number}`} value={robot.number}>{robot.alliance === "red" ? "Rojo" : "Azul"} · {robot.number}{robot.name ? ` · ${robot.name}` : ""}</option>)}</select></label>}
+            {eventCode && !matches.length && !loading && <div className="inline-hint"><AlertTriangle size={14}/> No hay partidos disponibles para este evento. Puedes reintentar la consulta FIRST con el botón superior.</div>}
+            {selectedMatch ? <>
+              <div className="score-results"><div className="official-alliance red"><b>ALIANZA ROJA</b><span>{selectedMatch.redTeams.map(team => `${team.number}${team.name ? ` · ${team.name}` : ""}`).join(" / ") || "Equipos no publicados"}</span></div><div className="official-alliance blue"><b>ALIANZA AZUL</b><span>{selectedMatch.blueTeams.map(team => `${team.number}${team.name ? ` · ${team.name}` : ""}`).join(" / ") || "Equipos no publicados"}</span></div></div>
+              <label className="field"><span>Equipo participante observado</span><select aria-label="Equipo participante observado" value={teamNumber} onChange={event => { setTeamNumber(event.target.value); setSaved(""); }}><option value="">Selecciona el equipo</option>{robots.map(robot => <option key={`${robot.alliance}-${robot.number}`} value={robot.number}>{robot.alliance === "red" ? "Rojo" : "Azul"} · {robot.number}{robot.name ? ` · ${robot.name}` : ""}</option>)}</select></label>
+            </> : eventTeams.length > 0 ? <label className="field"><span>Equipos oficiales del evento</span><select aria-label="Equipos oficiales del evento" disabled><option>{eventTeams.map(team => team.number).join(" · ")}</option></select></label> : null}
           </div>
         </section>
         <section className="panel form-panel">
@@ -172,7 +185,7 @@ export default function FirstMatchScouting({ setData }: Props) {
             {selectedMatch && teamNumber && <div className="scoring-identity"><div className="score-input read-only"><span>Evento / partido</span><b>{season} · {selectedMatch.eventCode} · M{selectedMatch.number}</b></div><div className="score-input read-only"><span>Equipo / alianza / nivel</span><b>{teamNumber} · {selectedMatch.redTeams.some(team => team.number === Number(teamNumber)) ? "Roja" : "Azul"} · {selectedMatch.level}</b></div></div>}
             <label className="field"><span>Cantidad de polen introducida</span><input aria-label="Cantidad de polen" type="number" min="0" step="1" inputMode="numeric" value={pollen} onChange={event => { setPollen(event.target.value); setSaved(""); }} placeholder="0"/></label>
             <div className="pool-pending"><AlertTriangle size={13}/><span>Estimaciones desactivadas: las reglas oficiales no están verificadas.</span></div>
-            <div className="form-foot"><span><i className="pending-dot"/> Guardado local</span><button className="button button-primary" type="button" onClick={savePollen}><CheckCircle2 size={15}/> Guardar polen</button></div>
+            <div className="form-foot"><span><i className="pending-dot"/> Guardado local</span><button className="button button-primary" type="button" onClick={savePollen} disabled={!selectedMatch || !teamNumber || parsePollenCount(pollen) === null}><CheckCircle2 size={15}/> Guardar polen</button></div>
           </div>
         </section>
       </div>

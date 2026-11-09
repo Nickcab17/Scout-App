@@ -39,3 +39,14 @@ test("FIRST metadata and pollen are stored without invented scoring values", () 
   assert.equal(result.observation.officialMatchId, match.id);
   assert.equal(result.observation.scoringConfirmed, undefined);
 });
+
+test("each capture creates a new observation instead of overwriting the previous record", () => {
+  const first = buildFirstMatchAndObservation(match, 9102, 0, { matches: [], observations: [] });
+  const second = buildFirstMatchAndObservation(match, 9102, 7, {
+    matches: [first.localMatch],
+    observations: [first.observation],
+  });
+  assert.notEqual(first.observation.id, second.observation.id);
+  assert.equal(second.observation.pollenCount, 7);
+  assert.equal(second.observation.matchId, first.localMatch.id);
+});

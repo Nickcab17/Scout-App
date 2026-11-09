@@ -48,13 +48,18 @@ test("uses FIRST match data, records zero pollen, persists locally, and hides ma
   await page.getByRole("button", { name: "Match Scouting" }).click();
   await page.getByLabel("Evento FIRST").selectOption("TEST1");
   await page.getByLabel("Partido oficial").selectOption({ index: 1 });
-  await page.getByLabel("Robot observado").selectOption("9102");
+  await page.getByLabel("Equipo participante observado").selectOption("9102");
   await page.getByLabel("Cantidad de polen").fill("0");
   await page.getByRole("button", { name: "Guardar polen" }).click();
   await expect(page.getByText("Guardado localmente")).toBeVisible();
+  await expect(page.getByLabel("Cantidad de polen")).toHaveValue("");
+
+  await page.getByLabel("Cantidad de polen").fill("7");
+  await page.getByRole("button", { name: "Guardar polen" }).click();
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations.length)).toBe(2);
 
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}"));
-  expect(saved.observations).toHaveLength(1);
+  expect(saved.observations).toHaveLength(2);
   expect(saved.observations[0]).toMatchObject({
     teamNumber: 9102,
     pollenCount: 0,
@@ -62,17 +67,17 @@ test("uses FIRST match data, records zero pollen, persists locally, and hides ma
     season: 2026,
     eventCode: "TEST1",
   });
+  expect(saved.observations[1]).toMatchObject({ teamNumber: 9102, pollenCount: 7, alliance: "red", eventCode: "TEST1" });
   await page.reload();
   await page.getByRole("button", { name: "Match Scouting" }).click();
-  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations.length)).toBe(1);
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations.length)).toBe(2);
 });
 
 test("rejects invalid pollen and preserves the submitted count after reload", async ({ page }) => {
   await page.getByRole("button", { name: "Match Scouting" }).click();
   await page.getByLabel("Cantidad de polen").fill("-1");
   await expect(page.getByLabel("Cantidad de polen")).toHaveValue("-1");
-  await page.getByRole("button", { name: "Guardar polen" }).click();
-  await expect(page.getByText(/Polen inválido/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Guardar polen" })).toBeDisabled();
 });
 
 test("applies and remembers appearance preferences in this browser", async ({ page }) => {
