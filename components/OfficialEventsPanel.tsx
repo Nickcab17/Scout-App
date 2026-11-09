@@ -133,7 +133,13 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
     let cancelled = false;
     void fetch(`/api/first/events/${encodeURIComponent(eventCode)}/teams?season=${season}`, { cache: "no-store" }).then(async response => {
       const payload = await response.json();
-      if (!cancelled && response.ok) setEventTeams(normalizeOfficialTeams(payload).map(team => ({ teamNumber: team.number, nameFull: team.name })) as Record<string, unknown>[]);
+      if (!cancelled && response.ok) {
+        const teams = normalizeOfficialTeams(payload);
+        setEventTeams(teams.map(team => ({ teamNumber: team.number, nameFull: team.name })) as Record<string, unknown>[]);
+        if (teams.length) window.dispatchEvent(new CustomEvent("biobuzz:import-first-teams", {
+          detail: { teams, season, eventCode: eventCode.toUpperCase(), selectedNumbers: teams.map(team => team.number) },
+        }));
+      }
       else if (!cancelled) setEventTeams([]);
     }).catch(() => { if (!cancelled) setEventTeams([]); });
     return () => { cancelled = true; };
