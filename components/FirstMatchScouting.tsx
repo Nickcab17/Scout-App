@@ -9,6 +9,7 @@ import { buildFirstMatchAndObservation, emptyMatchActions, parsePollenCount, typ
 import { calculateExtendedEstimate } from "@/lib/scoring";
 import { writeData } from "@/lib/persistence";
 import ContextHelp from "@/components/ContextHelp";
+import { readActiveFirstEvent, type ActiveFirstEvent } from "@/lib/first/active-event";
 
 type Props = { data: AppData; setData: (updater: (current: AppData) => AppData) => void };
 type Period = "auto" | "teleop" | "endgame" | "final";
@@ -107,6 +108,7 @@ export default function FirstMatchScouting({ data, setData }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
+  const [activeEvent, setActiveEvent] = useState<ActiveFirstEvent | null>(null);
 
   useEffect(() => {
     void fetch("/api/first/seasons", { cache: "no-store" }).then(async response => {
@@ -121,12 +123,32 @@ export default function FirstMatchScouting({ data, setData }: Props) {
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     try {
+      const active = readActiveFirstEvent();
+      if (active) {
+        setActiveEvent(active);
+        setSeason(active.season);
+        setEventCode(active.eventCode);
+        return;
+      }
       const raw = localStorage.getItem("biobuzz-first-v1");
       if (!raw) return;
       const store = JSON.parse(raw) as { selections?: Record<string, { season: number; eventCode: string }> };
       const selection = store.selections?.local;
       if (selection?.eventCode && Number.isInteger(selection.season)) { setSeason(selection.season === 2027 ? 2026 : selection.season); setEventCode(selection.eventCode); }
     } catch {}
+  }, []);
+  useEffect(() => {
+    const handleActiveEvent = (event: Event) => {
+      const detail = (event as CustomEvent<ActiveFirstEvent>).detail;
+      if (!detail?.eventCode) return;
+      setActiveEvent(detail);
+      setSeason(detail.season);
+      setEventCode(detail.eventCode);
+      setMatchId("");
+      setTeamNumber("");
+    };
+    window.addEventListener("biobuzz:active-first-event", handleActiveEvent);
+    return () => window.removeEventListener("biobuzz:active-first-event", handleActiveEvent);
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -137,7 +159,6 @@ export default function FirstMatchScouting({ data, setData }: Props) {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "FIRST no pudo consultar los eventos.");
       setEvents(payload.events ?? []);
-      setEventCode(current => payload.events?.some((event: OfficialEvent) => event.code === current) ? current : "");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "No fue posible consultar FIRST."); } finally { setLoading(false); }
   }
 
@@ -147,6 +168,8 @@ export default function FirstMatchScouting({ data, setData }: Props) {
 
   async function loadEventData(code: string, refresh = false) {
     if (!code) return;
+    const requestedSeason = season;
+    const requestedEventCode = code.toUpperCase();
     setLoading(true); setError(""); setSaved(""); setMatches([]); setMatchId(""); setTeamNumber("");
     try {
       const [teamResponse, qualResponse, playoffResponse] = await Promise.all([
@@ -155,6 +178,8 @@ export default function FirstMatchScouting({ data, setData }: Props) {
         fetch(`/api/first/events/${encodeURIComponent(code)}/schedule?season=${season}&level=playoff${refresh ? "&refresh=1" : ""}`, { cache: "no-store" }),
       ]);
       const [teamPayload, qualPayload, playoffPayload] = await Promise.all([teamResponse.json(), qualResponse.json(), playoffResponse.json()]);
+      const active = readActiveFirstEvent();
+      if (active && (active.season !== requestedSeason || active.eventCode !== requestedEventCode)) return;
       if (!teamResponse.ok) throw new Error(teamPayload.error || "FIRST no pudo consultar los equipos del evento.");
       const officialTeams = normalizeOfficialTeams(teamPayload);
       if (!officialTeams.length) throw new Error("FIRST no publicó equipos para este evento.");
@@ -233,6 +258,8 @@ export default function FirstMatchScouting({ data, setData }: Props) {
     if (!selectedMatch) { setError("Selecciona un partido oficial antes de guardar."); return; }
     const number = Number(teamNumber);
     if (!teamNumber || !Number.isInteger(number)) { setError("Selecciona el robot observado."); return; }
+    const participant = [...selectedMatch.redTeams, ...selectedMatch.blueTeams].some(team => team.number === number);
+    if (!participant) { setError("El equipo seleccionado no participa en este partido oficial."); return; }
     if (!validActions) { setError("Corrige los contadores inválidos antes de guardar."); return; }
     try {
       const result = buildFirstMatchAndObservation(selectedMatch, number, pollenCount, data, actions);
@@ -254,8 +281,7 @@ export default function FirstMatchScouting({ data, setData }: Props) {
     {saved && <div className="notice"><div className="notice-icon"><CheckCircle2 size={16}/></div><div><b>Guardado localmente</b><span>{saved}</span></div></div>}
     <div className="management-grid">
       <section className="panel form-panel"><div className="panel-head"><div><h2>Partido FIRST</h2><p>Selecciona partido y robot observado</p></div><CalendarDays size={17} className="head-icon"/></div><div className="form-stack">
-        <label className="field"><span>Temporada FIRST</span><select aria-label="Temporada FIRST" value={season} onChange={event => setSeason(Number(event.target.value))}>{seasons.map(year => <option key={year} value={year}>{year}—{year + 1}</option>)}</select></label>
-        <label className="field"><span>Evento FIRST</span><select aria-label="Evento FIRST" value={eventCode} onChange={event => selectEvent(event.target.value)}><option value="">Selecciona un evento oficial</option>{events.map(event => <option key={event.code} value={event.code}>{event.code} · {event.name}</option>)}</select></label>
+        <div className="active-event-banner"><span>Evento activo</span><b>{activeEvent?.eventName ?? activeEvent?.eventCode ?? (eventCode || "Sin evento confirmado")}</b>{activeEvent && <small>Temporada {activeEvent.season} · {activeEvent.eventCode}</small>}</div>
         <label className="field"><span>Partido oficial</span><select aria-label="Partido oficial" value={matchId} onChange={event => { setMatchId(event.target.value); setTeamNumber(""); }} disabled={!matches.length}><option value="">Selecciona un partido</option>{matches.map(match => <option key={match.id} value={match.id}>{match.level.toUpperCase()} M{match.number}{match.description ? ` · ${match.description}` : ""}</option>)}</select></label>
         {selectedMatch && <><div className="score-results"><div className="official-alliance red"><b>ALIANZA ROJA</b><span>{selectedMatch.redTeams.map(team => team.number).join(" · ")}</span></div><div className="official-alliance blue"><b>ALIANZA AZUL</b><span>{selectedMatch.blueTeams.map(team => team.number).join(" · ")}</span></div></div><label className="field"><span>Equipo participante observado</span><select aria-label="Equipo participante observado" value={teamNumber} onChange={event => setTeamNumber(event.target.value)}><option value="">Selecciona el equipo</option>{robots.map(robot => <option key={`${robot.alliance}-${robot.number}`} value={robot.number}>{robot.alliance === "red" ? "Rojo" : "Azul"} · {robot.number}{robot.name ? ` · ${robot.name}` : ""}</option>)}</select></label></>}
       </div></section>
