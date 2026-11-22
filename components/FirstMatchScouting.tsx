@@ -1,17 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { AlertTriangle, CalendarDays, CheckCircle2, Minus, Plus, RefreshCw, ShieldCheck } from "lucide-react";
 import type { AllianceFinalState, AppData, MatchActions } from "@/lib/types";
-import { normalizeHybridSchedule, type OfficialEvent, type OfficialMatch } from "@/lib/first/normalize";
-import { normalizeOfficialTeams, type OfficialTeam } from "@/lib/first/team-import";
+import { normalizeHybridSchedule, type OfficialMatch } from "@/lib/first/normalize";
+import { normalizeOfficialTeams } from "@/lib/first/team-import";
 import { buildFirstMatchAndObservation, emptyMatchActions, parsePollenCount, type FirstRobotMatch } from "@/lib/first/match-scouting";
 import { calculateExtendedEstimate } from "@/lib/scoring";
 import { writeData } from "@/lib/persistence";
 import ContextHelp from "@/components/ContextHelp";
 import { readActiveFirstEvent, type ActiveFirstEvent } from "@/lib/first/active-event";
+import { FIRST_SEASON } from "@/lib/first/season";
 
-type Props = { data: AppData; setData: (updater: (current: AppData) => AppData) => void };
+type Props = { data: AppData; setData: (updater: (current: AppData) => AppData) => void; activeEvent: ActiveFirstEvent | null };
 type Period = "auto" | "teleop" | "endgame" | "final";
 
 function NumberControl({ label, value, onChange, help }: { label: string; value: number; onChange: (value: number) => void; help?: string }) {
@@ -93,13 +94,10 @@ function hasValidMatchNumbers(value: unknown): boolean {
   return true;
 }
 
-export default function FirstMatchScouting({ data, setData }: Props) {
-  const [season, setSeason] = useState(2026);
-  const [seasons, setSeasons] = useState([2026, 2025, 2024, 2023]);
-  const [events, setEvents] = useState<OfficialEvent[]>([]);
-  const [eventCode, setEventCode] = useState("");
+export default function FirstMatchScouting({ data, setData, activeEvent }: Props) {
+  const season = FIRST_SEASON;
+  const eventCode = activeEvent?.season === FIRST_SEASON ? activeEvent.eventCode : "";
   const [matches, setMatches] = useState<FirstRobotMatch[]>([]);
-  const [eventTeams, setEventTeams] = useState<OfficialTeam[]>([]);
   const [matchId, setMatchId] = useState("");
   const [teamNumber, setTeamNumber] = useState("");
   const [period, setPeriod] = useState<Period>("auto");
@@ -108,66 +106,11 @@ export default function FirstMatchScouting({ data, setData }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
-  const [activeEvent, setActiveEvent] = useState<ActiveFirstEvent | null>(null);
-
-  useEffect(() => {
-    void fetch("/api/first/seasons", { cache: "no-store" }).then(async response => {
-      const payload = await response.json();
-      if (response.ok && Number.isInteger(payload.maxSeason)) {
-        const normalized = payload.maxSeason === 2027 ? 2026 : payload.maxSeason;
-        setSeasons(Array.from({ length: Math.max(0, normalized - 2023 + 1) }, (_, index) => normalized - index)); setSeason(normalized);
-      }
-    }).catch(() => {});
-  }, []);
-
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    try {
-      const active = readActiveFirstEvent();
-      if (active) {
-        setActiveEvent(active);
-        setSeason(active.season);
-        setEventCode(active.eventCode);
-        return;
-      }
-      const raw = localStorage.getItem("biobuzz-first-v1");
-      if (!raw) return;
-      const store = JSON.parse(raw) as { selections?: Record<string, { season: number; eventCode: string }> };
-      const selection = store.selections?.local;
-      if (selection?.eventCode && Number.isInteger(selection.season)) { setSeason(selection.season === 2027 ? 2026 : selection.season); setEventCode(selection.eventCode); }
-    } catch {}
-  }, []);
-  useEffect(() => {
-    const handleActiveEvent = (event: Event) => {
-      const detail = (event as CustomEvent<ActiveFirstEvent>).detail;
-      if (!detail?.eventCode) return;
-      setActiveEvent(detail);
-      setSeason(detail.season);
-      setEventCode(detail.eventCode);
-      setMatchId("");
-      setTeamNumber("");
-    };
-    window.addEventListener("biobuzz:active-first-event", handleActiveEvent);
-    return () => window.removeEventListener("biobuzz:active-first-event", handleActiveEvent);
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
-  async function loadEvents(refresh = false) {
-    setLoading(true); setError(""); setSaved("");
-    try {
-      const response = await fetch(`/api/first/events?season=${season}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "FIRST no pudo consultar los eventos.");
-      setEvents(payload.events ?? []);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "No fue posible consultar FIRST."); } finally { setLoading(false); }
-  }
-
-  /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
-  useEffect(() => { void loadEvents(); }, [season]);
-  /* eslint-enable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
+  const requestId = useRef(0);
 
   async function loadEventData(code: string, refresh = false) {
     if (!code) return;
+    const thisRequest = ++requestId.current;
     const requestedSeason = season;
     const requestedEventCode = code.toUpperCase();
     setLoading(true); setError(""); setSaved(""); setMatches([]); setMatchId(""); setTeamNumber("");
@@ -178,7 +121,7 @@ export default function FirstMatchScouting({ data, setData }: Props) {
         if (raw) cachedStore = JSON.parse(raw) as { schedules?: Record<string, { matches?: OfficialMatch[] }> };
       } catch {}
 
-      const teamResponse = await fetch(`/api/first/events/${encodeURIComponent(code)}/teams?season=${season}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" });
+      const teamResponse = await fetch(`/api/first/events/${encodeURIComponent(code)}/teams?season=${FIRST_SEASON}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" });
       const teamPayload = await teamResponse.json();
       const qualKey = `${requestedSeason}:${requestedEventCode}:qual`;
       const playoffKey = `${requestedSeason}:${requestedEventCode}:playoff`;
@@ -186,8 +129,9 @@ export default function FirstMatchScouting({ data, setData }: Props) {
       const cachedPlayoff = !refresh ? cachedStore.schedules?.[playoffKey]?.matches : undefined;
 
       const scheduleResponse = async (level: "qual" | "playoff", cached: OfficialMatch[] | undefined) => {
-        if (cached?.length) return { ok: true, payload: { matches: cached } };
-        const response = await fetch(`/api/first/events/${encodeURIComponent(code)}/schedule?season=${season}&level=${level}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" });
+        const validCached = cached?.filter(match => match.level === level && match.id.startsWith(`${requestedSeason}:${requestedEventCode}:${level}:`));
+        if (validCached?.length) return { ok: true, payload: { matches: validCached } };
+        const response = await fetch(`/api/first/events/${encodeURIComponent(code)}/schedule?season=${FIRST_SEASON}&level=${level}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" });
         return { ok: response.ok, payload: await response.json() };
       };
       const [qualResponse, playoffResponse] = await Promise.all([
@@ -197,11 +141,10 @@ export default function FirstMatchScouting({ data, setData }: Props) {
       const qualPayload = qualResponse.payload;
       const playoffPayload = playoffResponse.payload;
       const active = readActiveFirstEvent();
-      if (active && (active.season !== requestedSeason || active.eventCode !== requestedEventCode)) return;
+      if (thisRequest !== requestId.current || !active || active.season !== requestedSeason || active.eventCode !== requestedEventCode) return;
       if (!teamResponse.ok) throw new Error(teamPayload.error || "FIRST no pudo consultar los equipos del evento.");
       const officialTeams = normalizeOfficialTeams(teamPayload);
       if (!officialTeams.length) throw new Error("FIRST no publicó equipos para este evento.");
-      setEventTeams(officialTeams);
       window.dispatchEvent(new CustomEvent("biobuzz:import-first-teams", { detail: { teams: officialTeams, season, eventCode: code, selectedNumbers: officialTeams.map(team => team.number) } }));
 
       const combined = new Map<string, FirstRobotMatch>();
@@ -209,19 +152,31 @@ export default function FirstMatchScouting({ data, setData }: Props) {
         const rawPayload = payload as { matches?: unknown[] };
         return Array.isArray(rawPayload.matches) ? rawPayload.matches as OfficialMatch[] : normalizeHybridSchedule(payload, season, code, level);
       };
-      if (qualResponse.ok) normalize(qualPayload, "qual").forEach(match => combined.set(match.id, { ...match, season, eventCode: code } as FirstRobotMatch));
-      if (playoffResponse.ok) normalize(playoffPayload, "playoff").forEach(match => combined.set(match.id, { ...match, season, eventCode: code } as FirstRobotMatch));
+      if (qualResponse.ok) normalize(qualPayload, "qual").filter(match => match.id.startsWith(`${requestedSeason}:${requestedEventCode}:qual:`)).forEach(match => combined.set(match.id, { ...match, season, eventCode: code } as FirstRobotMatch));
+      if (playoffResponse.ok) normalize(playoffPayload, "playoff").filter(match => match.id.startsWith(`${requestedSeason}:${requestedEventCode}:playoff:`)).forEach(match => combined.set(match.id, { ...match, season, eventCode: code } as FirstRobotMatch));
       const officialMatches = [...combined.values()].sort((a, b) => (a.level === b.level ? a.number - b.number : a.level === "qual" ? -1 : 1));
       if (!officialMatches.length) throw new Error("FIRST no publicó partidos oficiales para este evento.");
       setMatches(officialMatches);
       try { const raw = localStorage.getItem("biobuzz-first-v1"); const store = raw ? JSON.parse(raw) as { selections?: Record<string, unknown>; schedules?: Record<string, unknown> } : { selections: {}, schedules: {} }; store.selections = { ...(store.selections ?? {}), local: { season, eventCode: code } }; localStorage.setItem("biobuzz-first-v1", JSON.stringify(store)); } catch {}
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "No fue posible cargar los datos oficiales."); } finally { setLoading(false); }
+    } catch (caught) {
+      if (thisRequest === requestId.current) setError(caught instanceof Error ? caught.message : "No fue posible cargar los datos oficiales.");
+    } finally { if (thisRequest === requestId.current) setLoading(false); }
   }
 
-  function selectEvent(code: string) { setEventCode(code); setMatchId(""); setTeamNumber(""); }
-
   /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
-  useEffect(() => { if (eventCode) void loadEventData(eventCode); }, [eventCode, season]);
+  useEffect(() => {
+    if (eventCode) void loadEventData(eventCode);
+    else {
+      requestId.current += 1;
+      setMatches([]);
+      setMatchId("");
+      setTeamNumber("");
+      setLoading(false);
+      setError("");
+      setSaved("");
+      setActions(emptyMatchActions());
+    }
+  }, [eventCode, season]);
   /* eslint-enable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 
   const selectedMatch = useMemo(() => matches.find(match => match.id === matchId), [matches, matchId]);
@@ -294,7 +249,7 @@ export default function FirstMatchScouting({ data, setData }: Props) {
   const periods: Period[] = ["auto", "teleop", "endgame", "final"];
 
   return <div className="first-match-scouting">
-    <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line"/> CAPTURA OFICIAL / EN CAMPO</div><h1>Match Scouting</h1><p className="subheading">AUTO, TELEOP y End Game, con acciones individuales separadas de resultados de alianza.</p></div><button className="button button-secondary" type="button" onClick={() => { void loadEvents(true); if (eventCode) void loadEventData(eventCode, true); }} disabled={loading}><RefreshCw size={15}/> Reintentar consulta FIRST</button></div>
+    <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line"/> CAPTURA OFICIAL / EN CAMPO</div><h1>Match Scouting</h1><p className="subheading">AUTO, TELEOP y End Game, con acciones individuales separadas de resultados de alianza.</p></div><button className="button button-secondary" type="button" onClick={() => { if (eventCode) void loadEventData(eventCode, true); }} disabled={loading || !eventCode}><RefreshCw size={15}/> Reintentar consulta FIRST</button></div>
     {error && <div className="notice"><div className="notice-icon"><AlertTriangle size={16}/></div><div><b>No se pudo completar la captura</b><span>{error}</span></div></div>}
     {saved && <div className="notice"><div className="notice-icon"><CheckCircle2 size={16}/></div><div><b>Guardado localmente</b><span>{saved}</span></div></div>}
     <div className="management-grid">

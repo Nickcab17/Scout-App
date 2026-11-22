@@ -125,8 +125,9 @@ test("confirms one active FIRST event and preserves it after reload", async ({ p
     status: 200,
     contentType: "application/json",
     body: JSON.stringify({ events: [
-      { id: "evt-a", code: "TESTA", name: "Regional A", city: "Austin" },
-      { id: "evt-b", code: "TESTB", name: "Regional B", city: "Boston" },
+      { id: "evt-a", code: "TESTA", name: "Regional A", city: "Austin", season: 2026 },
+      { id: "evt-b", code: "TESTB", name: "Regional B", city: "Boston", season: 2026 },
+      { id: "evt-old", code: "OLD25", name: "Regional anterior", season: 2025 },
     ], syncedAt: new Date().toISOString() }),
   }));
   await page.route("**/api/first/events/TESTA/teams?*", route => route.fulfill({
@@ -172,55 +173,80 @@ test("confirms one active FIRST event and preserves it after reload", async ({ p
   await page.route("**/api/first/events/TESTB/results/**", route => route.fulfill({
     status: 200, contentType: "application/json", body: JSON.stringify({ matches: [] }),
   }));
+  await page.route("**/api/first/events/TESTA/scores/**", route => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ scoreDetails: [] }),
+  }));
+  await page.route("**/api/first/events/TESTB/scores/**", route => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ scoreDetails: [] }),
+  }));
 
-  await page.getByRole("button", { name: "Events" }).click();
-  await page.getByRole("combobox", { name: "Evento oficial" }).selectOption("TESTA");
+  await expect(page.getByRole("button", { name: "FIRST Events" })).toHaveCount(1);
+  for (const removedMenu of ["Events", "Match Schedule", "Official Results"]) {
+    await expect(page.getByRole("button", { name: removedMenu, exact: true })).toHaveCount(0);
+  }
+  await page.getByRole("button", { name: "FIRST Events" }).click();
+  await expect(page.getByRole("heading", { name: "FIRST Events" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Eventos regionales disponibles" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Calendario de partidos" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Resultados oficiales FIRST" })).toBeVisible();
+  await expect(page.getByLabel("Regional para trabajar")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Confirmar evento activo" })).toHaveCount(1);
+  const schedulePanel = page.getByRole("region", { name: "Calendario de partidos" });
+  const officialResults = page.getByRole("region", { name: "Resultados oficiales FIRST" });
+  await page.getByLabel("Regional para trabajar").selectOption("TESTA");
   await page.getByRole("button", { name: "Confirmar evento activo" }).click();
-  await expect(page.getByText("Evento activo:", { exact: false })).toContainText("Regional A");
+  await expect(page.getByRole("button", { name: "Confirmar evento activo" })).toBeDisabled();
+  await expect(page.getByLabel("Regional para trabajar").locator("option[value='OLD25']")).toHaveCount(0);
+  await expect(schedulePanel.getByText("A Qualification 14", { exact: false })).toBeVisible();
+  await expect(officialResults.getByText("A Qualification 14", { exact: false })).toBeVisible();
+  await expect(page.getByText("Regional A", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Regional anterior", { exact: true })).toHaveCount(0);
+  await expect(officialResults.getByText("100", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Resumen individual estimado", { exact: true })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Match Schedule" }).click();
-  await expect(page.getByText("Evento activo:", { exact: false })).toContainText("Regional A");
-
-  await page.getByRole("button", { name: "Official Results" }).click();
-  await expect(page.getByText("Evento activo:", { exact: false })).toContainText("Regional A");
+  await page.getByRole("button", { name: "Match Scouting" }).click();
+  await expect(page.getByText("Regional A", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Regional para trabajar")).toHaveCount(0);
+  await page.getByLabel("Partido oficial").selectOption({ index: 1 });
+  const firstRegionalRobots = await page.getByLabel("Equipo participante observado").locator("option").allTextContents();
+  expect(firstRegionalRobots.join(" ")).toContain("9101");
+  expect(firstRegionalRobots.join(" ")).toContain("9202");
+  expect(firstRegionalRobots.join(" ")).not.toContain("8101");
+  await expect(page.getByText("Resumen individual estimado", { exact: true })).toBeVisible();
+  await page.getByLabel("Equipo participante observado").selectOption("9101");
+  await page.getByRole("button", { name: "Guardar observación" }).click();
+  await expect(page.getByText("Guardado localmente")).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations?.length ?? 0)).toBe(1);
+  const firstObservation = await page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations[0]);
+  expect(firstObservation).toMatchObject({ teamNumber: 9101, season: 2026, eventCode: "TESTA", tournamentLevel: "qual", officialMatchId: "2026:TESTA:qual:0:14" });
 
   await page.reload();
-  await page.getByRole("button", { name: "Match Schedule" }).click();
-  await expect(page.getByText("Evento activo:", { exact: false })).toContainText("Regional A");
-
-  await page.evaluate(() => {
-    const data = JSON.parse(localStorage.getItem("biobuzz-scout-v1") || '{"teams":[],"matches":[],"observations":[]}');
-    data.observations.push({
-      id: "obs-a", matchId: "match-a", teamNumber: 9101, status: "submitted",
-      auto: "", teleop: "", hiveTip: "", pollen: "3", nectar: "", flowerGarden: "", leavePark: "", issues: "", notes: "Regional A preserved",
-      updatedAt: new Date().toISOString(), pollenCount: 3, alliance: "red", season: 2026, eventCode: "TESTA", tournamentLevel: "qual", officialMatchId: "2026:TESTA:qual:0:14",
-    });
-    localStorage.setItem("biobuzz-scout-v1", JSON.stringify(data));
-  });
-  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations?.length ?? 0)).toBe(1);
+  await page.getByRole("button", { name: "FIRST Events" }).click();
+  await expect(page.getByText("Regional A", { exact: true }).first()).toBeVisible();
   await page.reload();
   await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations?.length ?? 0)).toBe(1);
 
-  await page.getByRole("button", { name: "Events" }).click();
-  await page.getByRole("combobox", { name: "Evento oficial" }).selectOption("TESTB");
+  await page.getByRole("button", { name: "FIRST Events" }).click();
+  await page.getByLabel("Regional para trabajar").selectOption("TESTB");
   await page.getByRole("button", { name: "Confirmar evento activo" }).click();
-  await expect(page.getByText("Evento activo:", { exact: false })).toContainText("Regional B");
+  await expect(page.getByRole("button", { name: "Confirmar evento activo" })).toBeDisabled();
 
-  await page.getByRole("button", { name: "Match Schedule" }).click();
-  await expect(page.getByText("B Qualification 24", { exact: false })).toBeVisible();
-  await expect(page.getByText("A Qualification 14", { exact: false })).toHaveCount(0);
-
-  await page.getByRole("button", { name: "Official Results" }).click();
-  await expect(page.getByText("B Qualification 24", { exact: false })).toBeVisible();
-  await expect(page.getByText("A Qualification 14", { exact: false })).toHaveCount(0);
-  await expect(page.getByText("200", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("100", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Regional B", { exact: true }).first()).toBeVisible();
+  const previousEvent = page.locator(".official-event-row").filter({ hasText: "Regional A" });
+  await expect(previousEvent).toBeVisible();
+  await expect(previousEvent.locator(".official-badge")).toHaveCount(0);
+  await expect(schedulePanel.getByText("B Qualification 24", { exact: false })).toBeVisible();
+  await expect(officialResults.getByText("B Qualification 24", { exact: false })).toBeVisible();
+  await expect(schedulePanel.getByText("A Qualification 14", { exact: false })).toHaveCount(0);
+  await expect(officialResults.getByText("A Qualification 14", { exact: false })).toHaveCount(0);
+  await expect(officialResults.getByText("200", { exact: true }).first()).toBeVisible();
+  await expect(officialResults.getByText("100", { exact: true })).toHaveCount(0);
   await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations?.length ?? 0)).toBe(1);
 
   await page.reload();
-  await page.getByRole("button", { name: "Match Schedule" }).click();
-  await expect(page.getByText("Evento activo:", { exact: false })).toContainText("Regional B");
-  await expect(page.getByText("B Qualification 24", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "FIRST Events" }).click();
+  await expect(page.getByText("Regional B", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "Calendario de partidos" }).getByText("B Qualification 24", { exact: false })).toBeVisible();
 
   await page.getByRole("button", { name: "Match Scouting" }).click();
   await page.getByLabel("Partido oficial").selectOption({ index: 1 });
@@ -232,4 +258,80 @@ test("confirms one active FIRST event and preserves it after reload", async ({ p
 
   const preserved = await page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations);
   expect(preserved.some((observation: { eventCode?: string }) => observation.eventCode === "TESTA")).toBe(true);
+});
+
+test("ignores a delayed schedule response after switching to another regional", async ({ page }) => {
+  await page.route("**/api/first/events?*", route => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ events: [
+      { id: "evt-a", code: "TESTA", name: "Regional A", season: 2026 },
+      { id: "evt-b", code: "TESTB", name: "Regional B", season: 2026 },
+    ] }),
+  }));
+  await page.route("**/api/first/events/TESTA/schedule?*", async route => {
+    await new Promise(resolve => setTimeout(resolve, 750));
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: [{
+      id: "2026:TESTA:qual:0:1", level: "qual", series: 0, number: 1, description: "Delayed A match",
+      redTeams: [], blueTeams: [], redFinal: null, blueFinal: null, status: "scheduled",
+    }] }) });
+  });
+  await page.route("**/api/first/events/TESTB/schedule?*", route => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ matches: [{
+      id: "2026:TESTB:qual:0:2", level: "qual", series: 0, number: 2, description: "Current B match",
+      redTeams: [], blueTeams: [], redFinal: null, blueFinal: null, status: "scheduled",
+    }] }),
+  }));
+  await page.route("**/api/first/events/TESTA/teams?*", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ teams: [] }) }));
+  await page.route("**/api/first/events/TESTB/teams?*", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ teams: [] }) }));
+  await page.route("**/api/first/events/TESTA/results/**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: [] }) }));
+  await page.route("**/api/first/events/TESTB/results/**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: [] }) }));
+  await page.route("**/api/first/events/TESTA/scores/**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ scoreDetails: [] }) }));
+  await page.route("**/api/first/events/TESTB/scores/**", route => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ scoreDetails: [] }) }));
+
+  await page.getByRole("button", { name: "FIRST Events" }).click();
+  await page.getByLabel("Regional para trabajar").selectOption("TESTA");
+  await page.getByRole("button", { name: "Confirmar evento activo" }).click();
+  await page.getByLabel("Regional para trabajar").selectOption("TESTB");
+  await page.getByRole("button", { name: "Confirmar evento activo" }).click();
+  await expect(page.getByText("Current B match", { exact: false })).toBeVisible();
+  await page.waitForTimeout(1000);
+  await expect(page.getByText("Delayed A match", { exact: false })).toHaveCount(0);
+  await expect(page.getByText("Current B match", { exact: false })).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-active-first-event-v1") || "{}").eventCode)).toBe("TESTB");
+  await expect(page.getByText("FIRST todavía no ha publicado resultados para este evento y nivel.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Delayed A match", { exact: false })).toHaveCount(0);
+});
+
+test("keeps events beyond the first selector page searchable and selectable", async ({ page }) => {
+  const events = Array.from({ length: 61 }, (_, index) => ({
+    id: `event-${index + 1}`,
+    code: `EVT${String(index + 1).padStart(3, "0")}`,
+    name: `Regional ${index + 1}`,
+    type: index % 2 === 0 ? "Regional Championship" : "Qualifier",
+    city: index === 60 ? "Ciudad de México" : "City",
+    country: index === 60 ? "Mexico" : "USA",
+    season: 2026,
+  }));
+  await page.route("**/api/first/events?*", route => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ events, syncedAt: new Date().toISOString(), pageTotal: 2 }),
+  }));
+  await page.route("**/api/first/events/EVT061/teams?*", route => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ teams: [] }),
+  }));
+  await page.route("**/api/first/events/EVT061/schedule?*", route => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ matches: [], syncedAt: new Date().toISOString() }),
+  }));
+  await page.route("**/api/first/events/EVT061/results/**", route => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ matches: [] }),
+  }));
+  await page.route("**/api/first/events/EVT061/scores/**", route => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ scoreDetails: [] }),
+  }));
+
+  await page.getByRole("button", { name: "FIRST Events" }).click();
+  await expect(page.locator(".official-event-row")).toHaveCount(61);
+  await expect(page.getByText("Mexico", { exact: false }).last()).toBeVisible();
+  await page.getByLabel("Buscar eventos de FIRST · temporada 2026").fill("Regional 61");
+  await page.getByLabel("Regional para trabajar").selectOption("EVT061");
+  await page.getByRole("button", { name: "Confirmar evento activo" }).click();
+  await expect(page.getByText("Evento FIRST 2026 · EVT061")).toBeVisible();
 });

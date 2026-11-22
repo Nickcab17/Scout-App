@@ -1,20 +1,20 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CalendarDays, RefreshCw, Search } from "lucide-react";
 import { OfficialEvent, OfficialMatch, mergeOfficialMatches, normalizeHybridSchedule } from "@/lib/first/normalize";
 import { normalizeOfficialTeams, previewTeamImport, type OfficialTeam, type TeamImportPreview } from "@/lib/first/team-import";
 import { readData } from "@/lib/persistence";
-import { readActiveFirstEvent, writeActiveFirstEvent, type ActiveFirstEvent } from "@/lib/first/active-event";
+import { readActiveFirstEvent, type ActiveFirstEvent } from "@/lib/first/active-event";
+import { FIRST_SEASON } from "@/lib/first/season";
 
 type Level = "qual" | "playoff";
 type ScheduleCache = { matches: OfficialMatch[]; syncedAt: string; lastModified: string | null; scoreDetails?: unknown[] };
 type Store = { selections: Record<string, { season: number; eventCode: string }>; schedules: Record<string, ScheduleCache> };
 const KEY = "biobuzz-first-v1";
 const emptyStore: Store = { selections: {}, schedules: {} };
-const normalizeSeason = (year: number) => year === 2027 ? 2026 : year;
 const scheduleKey = (season: number, code: string, level: Level) => `${season}:${code.toUpperCase()}:${level}`;
 const teamList = (teams?: { number: number; name: string | null }[]) => Array.isArray(teams) && teams.length ? teams.map(team => `${team.number}${team.name ? ` · ${team.name}` : ""}`).join(" / ") : "Equipos no publicados";
-const officialPoints = (value: number | null) => value === null ? "Pendiente" : String(value);
+const officialPoints = (value: number | null | undefined) => value == null ? "Pendiente" : String(value);
 const dateText = (value: string | null) => {
   if (!value) return null;
   const parts = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}:\d{2}))?/.exec(value);
@@ -22,47 +22,60 @@ const dateText = (value: string | null) => {
   return `${parts[3]}/${parts[2]}/${parts[1]}${parts[4] ? ` · ${parts[4]} hora local del evento` : ""}`;
 };
 const syncText = (value: string) => new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+const eventTypeLabel = (event: OfficialEvent) => {
+  if (!event.type) return "Tipo no especificado";
+  return /regional/i.test(event.type) ? `Regional · ${event.type}` : event.type;
+};
 
-export default function OfficialEventsPanel({ mode = "events" }: { mode?: "events" | "schedule" | "results" }) {
+function OfficialMatchCard({ match, scoreDetails }: { match: OfficialMatch; scoreDetails?: unknown[] }) {
+  const details = scoreDetails?.filter(item => item && typeof item === "object" && Number((item as Record<string, unknown>).matchNumber) === match.number) ?? [];
+  return <article className="official-match" key={match.id}>
+    <div className="official-match-title"><b>{match.description || `${match.level.toUpperCase()} · Partido ${match.number}`}</b><span>{match.status === "played" ? "Disputado · resultado oficial FIRST" : match.status === "result_pending" ? "Iniciado · resultado pendiente de publicación" : "Programado · sin resultado oficial"}</span><small>{dateText(match.actualStartTime ?? match.startTime) ?? "Hora no publicada"}</small></div>
+    <div className="official-alliance red"><b>ROJO</b><span>{teamList(match.redTeams)}</span><strong>{officialPoints(match.redFinal)}</strong></div>
+    <div className="official-alliance blue"><b>AZUL</b><span>{teamList(match.blueTeams)}</span><strong>{officialPoints(match.blueFinal)}</strong></div>
+    {match.status === "played" && <div className="official-score-details"><span>AUTO Rojo: {officialPoints(match.redAuto)}</span><span>TELEOP Rojo: {officialPoints(match.redDriveControlled)}</span><span>Faltas Rojo: {officialPoints(match.redFoul)}</span><span>Endgame Rojo: {officialPoints(match.redEndgame)}</span><span>AUTO Azul: {officialPoints(match.blueAuto)}</span><span>TELEOP Azul: {officialPoints(match.blueDriveControlled)}</span><span>Faltas Azul: {officialPoints(match.blueFoul)}</span><span>Endgame Azul: {officialPoints(match.blueEndgame)}</span></div>}
+    {details.length > 0 && <details className="official-score-details"><summary>Detalles de scoring publicados por FIRST</summary><pre>{JSON.stringify(details, null, 2)}</pre></details>}
+  </article>;
+}
+
+export default function OfficialEventsPanel({ mode = "schedule", activeEvent, onActiveEventChange }: {
+  mode?: "events" | "schedule" | "results";
+  activeEvent: ActiveFirstEvent | null;
+  onActiveEventChange: (selection: ActiveFirstEvent) => void;
+}) {
   const [store, setStore] = useState<Store>(emptyStore);
-  const [season, setSeason] = useState(2026);
-  const [seasonYears, setSeasonYears] = useState([2026, 2025, 2024, 2023]);
+  const [storeLoaded, setStoreLoaded] = useState(false);
+  const season = FIRST_SEASON;
   const [events, setEvents] = useState<OfficialEvent[]>([]);
   const [eventDetail, setEventDetail] = useState<{ code: string; event: OfficialEvent } | null>(null);
   const [eventTeams, setEventTeams] = useState<Record<string, unknown>[]>([]);
+  const [eventTeamsCode, setEventTeamsCode] = useState("");
   const [importPreview, setImportPreview] = useState<TeamImportPreview[]>([]);
   const [selectedImportNumbers, setSelectedImportNumbers] = useState<number[]>([]);
   const [importSummary, setImportSummary] = useState("");
   const [eventPage, setEventPage] = useState(0);
   const [eventsSeason, setEventsSeason] = useState<number | null>(null);
-  const [eventCode, setEventCode] = useState("");
-  const [pendingEventCode, setPendingEventCode] = useState("");
-  const [activeEvent, setActiveEvent] = useState<ActiveFirstEvent | null>(null);
+  const [pendingSelection, setPendingSelection] = useState<{ code: string; currentEventCode: string }>({ code: "", currentEventCode: "" });
   const [search, setSearch] = useState("");
   const [level, setLevel] = useState<Level>("qual");
   const [busyEvents, setBusyEvents] = useState(false);
   const [busySchedule, setBusySchedule] = useState(false);
   const [message, setMessage] = useState("");
+  const scheduleRequest = useRef(0);
   const selectionStatus = "Selección guardada en este navegador.";
   const scope = "local";
+  const eventCode = activeEvent?.season === FIRST_SEASON ? activeEvent.eventCode : "";
+  const pendingEventCode = pendingSelection.currentEventCode === eventCode ? pendingSelection.code : "";
+  const currentEventTeams = eventTeamsCode === eventCode ? eventTeams : [];
   const selectedEvent = eventDetail?.code === eventCode.toUpperCase() ? eventDetail.event : eventsSeason === season ? events.find(event => event.code.toUpperCase() === eventCode.toUpperCase()) : undefined;
   const currentCache = store.schedules[scheduleKey(season, eventCode, level)];
-  const visibleMatches = Array.from(new Map((currentCache?.matches ?? [])
-    .filter(match => mode !== "results" || match.status === "played")
-    .map(match => [match.id, match])).values());
-  const filteredEvents = useMemo(() => (eventsSeason === season ? events : []).filter(event => `${event.name} ${event.code} ${event.city ?? ""} ${event.stateProv ?? ""} ${event.venue ?? ""}`.toLowerCase().includes(search.toLowerCase())), [events, eventsSeason, search, season]);
+  const scopedMatches = currentCache?.matches.filter(match => match.level === level && match.id.startsWith(`${FIRST_SEASON}:${eventCode.toUpperCase()}:${level}:`)) ?? [];
+  const scheduleMatches = Array.from(new Map(scopedMatches.map(match => [match.id, match])).values());
+  const officialResults = scheduleMatches.filter(match => match.status === "played");
+  const visibleMatches = scheduleMatches;
+  const filteredEvents = useMemo(() => (eventsSeason === season ? events : []).filter(event => `${event.name} ${event.code} ${event.type ?? ""} ${event.city ?? ""} ${event.stateProv ?? ""} ${event.country ?? ""} ${event.venue ?? ""}`.toLowerCase().includes(search.toLowerCase())), [events, eventsSeason, search, season]);
   const pageSize = 60;
   const visibleEvents = filteredEvents.slice(eventPage * pageSize, (eventPage + 1) * pageSize);
-
-  useEffect(() => {
-    let cancelled = false;
-    void fetch("/api/first/seasons", { cache: "no-store" }).then(async response => {
-      const result = await response.json();
-      if (!response.ok || !Number.isInteger(result.maxSeason)) return;
-      if (!cancelled) setSeasonYears(Array.from({ length: Math.max(0, result.maxSeason - 2023 + 1) }, (_, index) => result.maxSeason - index));
-    }).catch(() => { /* The season selector retains its last usable values while FIRST is unavailable. */ });
-    return () => { cancelled = true; };
-  }, []);
 
   useEffect(() => {
     if (!eventCode) return;
@@ -74,12 +87,10 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
     return () => { cancelled = true; };
   }, [eventCode, season]);
 
-  // localStorage is read after hydration so this page stays safe during static rendering.
   useEffect(() => {
     const timer = setTimeout(() => {
       try {
         const raw = localStorage.getItem(KEY);
-        const active = readActiveFirstEvent();
         if (raw) {
           const parsed = JSON.parse(raw) as Partial<Store>;
           const next = {
@@ -87,82 +98,60 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
             schedules: parsed.schedules && typeof parsed.schedules === "object" && !Array.isArray(parsed.schedules) ? parsed.schedules : {},
           };
           setStore(next);
-          const localSelection = next.selections[scope];
-          const selection = active ?? (localSelection ? { season: normalizeSeason(localSelection.season), eventCode: localSelection.eventCode } : null);
-          if (selection) {
-            setSeason(normalizeSeason(selection.season));
-            setEventCode(selection.eventCode);
-            setPendingEventCode(selection.eventCode);
-            setActiveEvent(selection);
-          }
-        } else if (active) {
-          setSeason(normalizeSeason(active.season));
-          setEventCode(active.eventCode);
-          setPendingEventCode(active.eventCode);
-          setActiveEvent(active);
         }
       } catch { setMessage("No se pudo leer el historial local de eventos FIRST."); }
+      finally { setStoreLoaded(true); }
     }, 0);
     return () => clearTimeout(timer);
   }, [scope]);
 
   useEffect(() => {
+    if (!storeLoaded) return;
     try { localStorage.setItem(KEY, JSON.stringify(store)); }
     catch { /* The current response remains in memory; a later browser write may succeed. */ }
-  }, [store]);
+  }, [store, storeLoaded]);
 
   const loadEvents = useCallback(async (refresh = false) => {
     setBusyEvents(true); setMessage("");
     try {
-      const response = await fetch(`/api/first/events?season=${season}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" });
+      const response = await fetch(`/api/first/events?season=${FIRST_SEASON}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "No fue posible obtener eventos de FIRST.");
-      setEvents(result.events ?? []);
-      setEventsSeason(season);
-      if (result.events?.length) {
-        const index = result.events.findIndex((event: OfficialEvent) => event.code.toUpperCase() === eventCode.toUpperCase());
-        if (index >= 0) setEventPage(Math.floor(index / pageSize));
-      }
-      setMessage(result.warning ? `${result.warning} Última descarga correcta: ${syncText(result.syncedAt)}.` : result.events?.length ? `Consulta FIRST correcta · ${syncText(result.syncedAt)}${result.persisted ? " · caché oficial compartido" : " · caché local"}` : "FIRST no publicó eventos para esta temporada.");
+      const currentSeasonEvents = Array.isArray(result.events) ? result.events.filter((event: OfficialEvent & { season?: number; seasonYear?: number; seasonCode?: number | string }) => {
+        const suppliedSeason = event.season ?? event.seasonYear ?? event.seasonCode;
+        const parsedSeason = typeof suppliedSeason === "number" ? suppliedSeason : typeof suppliedSeason === "string" ? Number(suppliedSeason) : null;
+        return parsedSeason === null || !Number.isFinite(parsedSeason) || parsedSeason === FIRST_SEASON;
+      }) : [];
+      setEvents(currentSeasonEvents);
+      setEventsSeason(FIRST_SEASON);
+      setMessage(result.warning ? `${result.warning} Última descarga correcta: ${syncText(result.syncedAt)}.` : currentSeasonEvents.length ? `Consulta FIRST correcta · ${currentSeasonEvents.length} eventos en ${result.pageTotal ?? 1} páginas · ${syncText(result.syncedAt)}${result.persisted ? " · caché oficial compartido" : " · caché local"}` : "FIRST no publicó eventos para esta temporada.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "No se pudo conectar con FIRST; conserva la última consulta correcta."); }
     finally { setBusyEvents(false); }
-  }, [eventCode, season]);
-
-  useEffect(() => { const timer = setTimeout(() => void loadEvents(), 0); return () => clearTimeout(timer); }, [loadEvents]);
-
-  function confirmSelection(nextSeason: number, nextCode: string) {
-    if (!nextCode) return;
-    const selected = events.find(event => event.code.toUpperCase() === nextCode.toUpperCase());
-    const selection: ActiveFirstEvent = { season: normalizeSeason(nextSeason), eventCode: nextCode.toUpperCase(), eventId: selected?.id, eventName: selected?.name };
-    setSeason(selection.season);
-    setEventCode(selection.eventCode);
-    setPendingEventCode(selection.eventCode);
-    setActiveEvent(selection);
-    writeActiveFirstEvent(selection);
-    setMessage(`Evento activo confirmado: ${selected?.name ?? selection.eventCode}.`);
-    setImportPreview([]);
-    setSelectedImportNumbers([]);
-    setImportSummary("");
-    setStore(value => ({ ...value, selections: { ...value.selections, [scope]: { season: selection.season, eventCode: selection.eventCode } } }));
-  }
+  }, []);
 
   useEffect(() => {
-    const handleActiveEvent = (event: Event) => {
-      const detail = (event as CustomEvent<ActiveFirstEvent>).detail;
-      if (!detail?.eventCode) return;
-      setSeason(normalizeSeason(detail.season));
-      setEventCode(detail.eventCode);
-      setPendingEventCode(detail.eventCode);
-      setActiveEvent(detail);
-    };
-    window.addEventListener("biobuzz:active-first-event", handleActiveEvent);
-    return () => window.removeEventListener("biobuzz:active-first-event", handleActiveEvent);
-  }, []);
+    const timer = setTimeout(() => void loadEvents(), 0);
+    return () => clearTimeout(timer);
+  }, [loadEvents]);
+
+  function confirmSelection(nextCode: string) {
+    if (!nextCode) return;
+    const selected = events.find(event => event.code.toUpperCase() === nextCode.toUpperCase());
+    if (!selected || eventsSeason !== FIRST_SEASON) {
+      setMessage("Selecciona un evento recibido de FIRST para la temporada 2026.");
+      return;
+    }
+    const selection: ActiveFirstEvent = { season: FIRST_SEASON, eventCode: nextCode.toUpperCase(), eventId: selected.id, eventName: selected.name };
+    onActiveEventChange(selection);
+    setMessage(`Evento activo confirmado: ${selected?.name ?? selection.eventCode}.`);
+    setStore(value => ({ ...value, selections: { ...value.selections, [scope]: { season: selection.season, eventCode: selection.eventCode } } }));
+  }
 
   useEffect(() => {
     if (!eventCode) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setEventTeams([]);
+      setEventTeamsCode("");
       return;
     }
     let cancelled = false;
@@ -170,19 +159,20 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
       const payload = await response.json();
       if (!cancelled && response.ok) {
         const teams = normalizeOfficialTeams(payload);
+        setEventTeamsCode(eventCode.toUpperCase());
         setEventTeams(teams.map(team => ({ teamNumber: team.number, nameFull: team.name })) as Record<string, unknown>[]);
         if (teams.length) window.dispatchEvent(new CustomEvent("biobuzz:import-first-teams", {
           detail: { teams, season, eventCode: eventCode.toUpperCase(), selectedNumbers: teams.map(team => team.number) },
         }));
       }
-      else if (!cancelled) setEventTeams([]);
+      else if (!cancelled) { setEventTeams([]); setEventTeamsCode(""); }
     }).catch(() => { if (!cancelled) setEventTeams([]); });
     return () => { cancelled = true; };
   }, [eventCode, season]);
 
   function openTeamImportPreview() {
-    if (!eventCode || !eventTeams.length) return;
-    const teams: OfficialTeam[] = normalizeOfficialTeams({ teams: eventTeams.map(team => ({ teamNumber: team.teamNumber, nameFull: team.nameFull })) });
+    if (!eventCode || !currentEventTeams.length) return;
+    const teams: OfficialTeam[] = normalizeOfficialTeams({ teams: currentEventTeams.map(team => ({ teamNumber: team.teamNumber, nameFull: team.nameFull })) });
     const preview = previewTeamImport(readData(), teams, season, eventCode);
     setImportPreview(preview);
     setSelectedImportNumbers(preview.map(team => team.number));
@@ -191,7 +181,7 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
 
   function confirmTeamImport() {
     if (!eventCode || !importPreview.length) return;
-    const teams: OfficialTeam[] = normalizeOfficialTeams({ teams: eventTeams.map(team => ({ teamNumber: team.teamNumber, nameFull: team.nameFull })) });
+    const teams: OfficialTeam[] = normalizeOfficialTeams({ teams: currentEventTeams.map(team => ({ teamNumber: team.teamNumber, nameFull: team.nameFull })) });
     window.dispatchEvent(new CustomEvent("biobuzz:import-first-teams", {
       detail: { teams, season, eventCode, selectedNumbers: selectedImportNumbers },
     }));
@@ -204,39 +194,35 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
     setImportPreview([]);
   }
 
-  async function refreshSchedule() {
+  async function refreshSchedule(refresh = false) {
     if (!eventCode) return;
+    const thisRequest = ++scheduleRequest.current;
     const requestedSeason = season;
     const requestedEventCode = eventCode.toUpperCase();
     setBusySchedule(true); setMessage("");
     const outcomes = await Promise.allSettled((["qual", "playoff"] as const).map(async tournamentLevel => {
       const responses = await Promise.all([
-        fetch(`/api/first/events/${encodeURIComponent(eventCode)}/schedule?season=${season}&level=${tournamentLevel}&refresh=1`, { cache: "no-store" }),
-        fetch(`/api/first/events/${encodeURIComponent(eventCode)}/results/${tournamentLevel}?season=${season}&refresh=1`, { cache: "no-store" }),
-        fetch(`/api/first/events/${encodeURIComponent(eventCode)}/scores/${tournamentLevel}?season=${season}&refresh=1`, { cache: "no-store" }),
-        fetch(`/api/first/events/${encodeURIComponent(eventCode)}/teams?season=${season}`, { cache: "no-store" }),
+        fetch(`/api/first/events/${encodeURIComponent(eventCode)}/schedule?season=${FIRST_SEASON}&level=${tournamentLevel}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" }),
+        fetch(`/api/first/events/${encodeURIComponent(eventCode)}/results/${tournamentLevel}?season=${FIRST_SEASON}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" }),
+        fetch(`/api/first/events/${encodeURIComponent(eventCode)}/scores/${tournamentLevel}?season=${FIRST_SEASON}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" }),
       ]);
-      const [result, results, scores, teams] = await Promise.all(responses.map(response => response.json()));
+        const [result, results, scores] = await Promise.all(responses.map(response => response.json()));
       if (!responses[0].ok) throw new Error(result.error || `Falló la consulta ${tournamentLevel}.`);
-      if (responses[3].ok && Array.isArray(teams.teams)) {
-        const active = readActiveFirstEvent();
-        if (!active || (active.season === requestedSeason && active.eventCode === requestedEventCode)) setEventTeams(teams.teams);
-      }
       const key = scheduleKey(season, eventCode, tournamentLevel);
       setStore(value => {
         const active = readActiveFirstEvent();
-        if (active && (active.season !== requestedSeason || active.eventCode !== requestedEventCode)) return value;
+        if (!active || active.season !== requestedSeason || active.eventCode !== requestedEventCode) return value;
         const old = value.schedules[key];
-        let matches = result.matches as OfficialMatch[];
+        let matches = (result.matches as OfficialMatch[]).filter(match => match.level === tournamentLevel && match.id.startsWith(`${requestedSeason}:${requestedEventCode}:${tournamentLevel}:`));
         if (responses[1].ok && Array.isArray(results.matches)) matches = mergeOfficialMatches(matches, normalizeHybridSchedule({ schedule: results.matches }, season, eventCode, tournamentLevel));
-        if (old) matches = mergeOfficialMatches(old.matches, matches);
+        if (old) matches = mergeOfficialMatches(old.matches.filter(match => match.level === tournamentLevel && match.id.startsWith(`${requestedSeason}:${requestedEventCode}:${tournamentLevel}:`)), matches);
         return { ...value, schedules: { ...value.schedules, [key]: { matches, syncedAt: result.syncedAt, lastModified: result.lastModified, scoreDetails: responses[2].ok ? scores.scoreDetails : old?.scoreDetails } } };
       });
       return { tournamentLevel, count: (result.matches as OfficialMatch[]).length, persisted: Boolean(result.persisted), warning: result.warning as string | null, scoreWarning: responses[2].ok ? null : scores.error as string | undefined };
     }));
     const active = readActiveFirstEvent();
-    if (active && (active.season !== requestedSeason || active.eventCode !== requestedEventCode)) {
-      setBusySchedule(false);
+    if (thisRequest !== scheduleRequest.current || !active || active.season !== requestedSeason || active.eventCode !== requestedEventCode) {
+      if (thisRequest === scheduleRequest.current) setBusySchedule(false);
       return;
     }
     const failures = outcomes.filter(outcome => outcome.status === "rejected");
@@ -244,11 +230,11 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
     if (failures.length) setMessage(`${failures.map(item => item.reason instanceof Error ? item.reason.message : "Error de consulta").join(" ")} Los datos de la última actualización correcta se mantienen.`);
     else if (successes.some(item => item.value.warning || item.value.scoreWarning)) setMessage(`${successes.map(item => item.value.warning || item.value.scoreWarning).filter(Boolean).join(" ")} Se conserva la última descarga correcta.`);
     else setMessage(`Calendario actualizado desde FIRST: ${successes.map(item => `${item.value.tournamentLevel} ${item.value.count}`).join(" · ")} partidos${successes.every(item => item.value.persisted) ? " · caché oficial compartido" : " · copia local disponible"}.`);
-    setBusySchedule(false);
+    if (thisRequest === scheduleRequest.current) setBusySchedule(false);
   }
 
   useEffect(() => {
-    if (mode === "events" || !eventCode) return;
+    if (!eventCode) return;
     const active = readActiveFirstEvent();
     if (active && (active.season !== season || active.eventCode !== eventCode.toUpperCase())) return;
     if (!currentCache) {
@@ -256,28 +242,53 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
       return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventCode, season, mode, currentCache]);
+  }, [eventCode, season, currentCache]);
 
   const lastUpdate = currentCache?.syncedAt ? syncText(currentCache.syncedAt) : null;
+  const listedEvents = useMemo(() => {
+    const items = eventsSeason === FIRST_SEASON ? [...events] : [];
+    if (activeEvent && !items.some(event => event.code.toUpperCase() === activeEvent.eventCode)) {
+      items.unshift({
+        id: activeEvent.eventId ?? `${FIRST_SEASON}:${activeEvent.eventCode}`,
+        code: activeEvent.eventCode,
+        name: activeEvent.eventName ?? activeEvent.eventCode,
+        venue: null, address: null, city: null, stateProv: null, country: null,
+        dateStart: null, dateEnd: null, type: null,
+      });
+    }
+    return items;
+  }, [activeEvent, events, eventsSeason]);
   return <>
-    <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line"/> FIRST / DATOS OFICIALES</div><h1>{mode === "events" ? "Events" : mode === "schedule" ? "Match Schedule" : "Official Results"}</h1><p className="subheading">{mode === "events" ? "Eventos oficiales de FIRST: busca, selecciona y revisa sus datos." : mode === "schedule" ? "Calendario oficial de clasificación y eliminatorias para el evento seleccionado." : "Puntajes publicados por FIRST; las estimaciones de scouting se mantienen aparte."}</p></div><span className="count-chip">Temporada {season}</span></div>
+    <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line"/> FIRST / EVENTOS Y COMPETENCIA</div><h1>FIRST Events</h1><p className="subheading">Selecciona un regional una sola vez. Su calendario, equipos, resultados oficiales y Match Scouting comparten el mismo evento activo.</p></div><span className="count-chip">FTC {FIRST_SEASON}–{FIRST_SEASON + 1}</span></div>
     <section className="panel official-controls">
-      <div className="official-filter-grid"><label className="field"><span className="field-label">Temporada</span><select value={season} onChange={event => { setEventPage(0); setSeason(Number(event.target.value)); setPendingEventCode(""); }}>{seasonYears.map(year => <option key={year} value={year}>{year === 2026 ? "BIOBUZZ 2026–2027 (temporada FIRST 2026)" : `${year - 1}–${year} (FIRST ${year})`}</option>)}</select></label>
-        <label className="field"><span className="field-label">Buscar evento oficial</span><span className="official-search"><Search size={15}/><input value={search} onChange={event => { setEventPage(0); setSearch(event.target.value); }} placeholder="Nombre, ubicación o código"/></span></label>
+      {mode !== "results" && <div className="official-filter-grid">
+        <label className="field"><span className="field-label">Buscar eventos de FIRST · temporada {FIRST_SEASON}</span><span className="official-search"><Search size={15}/><input value={search} onChange={event => { setEventPage(0); setSearch(event.target.value); }} placeholder="Nombre, ubicación o código"/></span></label>
         <button className="button button-secondary" onClick={() => void loadEvents(true)} disabled={busyEvents}><RefreshCw size={15} className={busyEvents ? "spin" : ""}/> {busyEvents ? "Consultando FIRST…" : "Actualizar eventos"}</button>
-      </div>
-      <label className="field official-event-select"><span className="field-label">Evento oficial</span><select value={pendingEventCode} onChange={event => setPendingEventCode(event.target.value)} disabled={!filteredEvents.length}><option value="">{eventsSeason === season && events.length ? "Selecciona un evento recibido de FIRST" : "Carga los eventos de FIRST"}</option>{visibleEvents.map(event => <option key={event.id} value={event.code}>{event.name} · {event.code}{event.city ? ` · ${event.city}` : ""}</option>)}</select></label>
-      <div className="official-schedule-tools"><button className="button button-primary" type="button" disabled={!pendingEventCode || (pendingEventCode === activeEvent?.eventCode && season === activeEvent?.season)} onClick={() => confirmSelection(season, pendingEventCode)}>Confirmar evento activo</button>{activeEvent && <span>Evento activo: <b>{activeEvent.eventName ?? activeEvent.eventCode}</b> · {activeEvent.eventCode}</span>}</div>
-      {filteredEvents.length > pageSize && <div className="official-schedule-tools"><span>Mostrando {eventPage * pageSize + 1}–{Math.min((eventPage + 1) * pageSize, filteredEvents.length)} de {filteredEvents.length} eventos</span><button className="button button-secondary" disabled={eventPage === 0} onClick={() => setEventPage(value => value - 1)}>Anterior</button><button className="button button-secondary" disabled={(eventPage + 1) * pageSize >= filteredEvents.length} onClick={() => setEventPage(value => value + 1)}>Siguiente</button></div>}
-      {eventsSeason === season && events.length > 0 && filteredEvents.length === 0 && <p className="official-attribution">Ningún evento de esta temporada coincide con la búsqueda.</p>}
-      {selectedEvent && <div className="official-event-card"><div className="official-event-icon"><CalendarDays size={19}/></div><div><b>{selectedEvent.name}</b><span>{[selectedEvent.code, selectedEvent.venue, selectedEvent.city, selectedEvent.stateProv, selectedEvent.country].filter(Boolean).join(" · ")}</span><span>{[selectedEvent.dateStart && dateText(selectedEvent.dateStart), selectedEvent.dateEnd && dateText(selectedEvent.dateEnd)].filter(Boolean).join(" – ") || "Fechas no incluidas en la respuesta de FIRST"}</span></div><span className="official-badge">OFICIAL · FIRST</span></div>}
-      {eventCode && eventTeams.length > 0 && <section className="panel official-team-import"><div className="panel-head"><div><h2>Equipos participantes de FIRST</h2><p>{eventTeams.length} equipos publicados para este evento.</p></div><button className="button button-primary" onClick={openTeamImportPreview}>Vista previa e importar equipos</button></div>{importSummary && <div className="official-message"><span>{importSummary}</span></div>}{importPreview.length > 0 && <div className="official-team-preview"><div className="official-schedule-tools"><button className="button button-secondary" onClick={() => setSelectedImportNumbers(importPreview.map(team => team.number))}>Seleccionar todos</button><span>{selectedImportNumbers.length} de {importPreview.length} seleccionados</span></div><div className="table-wrap"><table><thead><tr><th>Importar</th><th>Equipo</th><th>Nombre FIRST</th><th>Estado</th></tr></thead><tbody>{importPreview.map(team => <tr key={team.number}><td><input aria-label={`Importar equipo ${team.number}`} type="checkbox" checked={selectedImportNumbers.includes(team.number)} onChange={event => setSelectedImportNumbers(values => event.target.checked ? [...values, team.number] : values.filter(number => number !== team.number))}/></td><td>{team.number}</td><td>{team.name}</td><td>{team.state === "new" ? "Nuevo" : team.state === "updated" ? "Actualizar datos oficiales" : "Ya existe"}</td></tr>)}</tbody></table></div><button className="button button-primary" disabled={!selectedImportNumbers.length} onClick={confirmTeamImport}>Confirmar importación</button></div>}</section>}
-      {eventCode && mode !== "events" && <div className="official-schedule-tools"><label className="field"><span className="field-label">Nivel de torneo</span><select value={level} onChange={event => setLevel(event.target.value as Level)}><option value="qual">Clasificación (qual)</option><option value="playoff">Eliminatorias (playoff)</option></select></label><button className="button button-primary" onClick={() => void refreshSchedule()} disabled={busySchedule}><RefreshCw size={15} className={busySchedule ? "spin" : ""}/> {busySchedule ? "Actualizando calendario…" : mode === "schedule" ? "Actualizar calendario FIRST" : "Actualizar resultados FIRST"}</button><span>{selectionStatus}</span></div>}
+      </div>}
+      {mode === "schedule" && <>
+        <label className="field official-event-select"><span className="field-label">Regional para trabajar</span><select aria-label="Regional para trabajar" value={pendingEventCode} onChange={event => setPendingSelection({ code: event.target.value, currentEventCode: eventCode })} disabled={!filteredEvents.length}><option value="">{eventsSeason === FIRST_SEASON && events.length ? "Selecciona un evento recibido de FIRST" : "Carga los eventos de FIRST"}</option>{visibleEvents.map(event => <option key={event.id} value={event.code}>{event.name} · {eventTypeLabel(event)} · {event.code}{event.city ? ` · ${event.city}` : ""}{event.country ? ` · ${event.country}` : ""}</option>)}</select></label>
+        <div className="official-schedule-tools"><button className="button button-primary" type="button" disabled={!pendingEventCode || (pendingEventCode === activeEvent?.eventCode && activeEvent?.season === FIRST_SEASON)} onClick={() => confirmSelection(pendingEventCode)}>Confirmar evento activo</button></div>
+      </>}
+      <div className="official-event-card"><div className="official-event-icon"><CalendarDays size={19}/></div><div><b>{activeEvent?.season === FIRST_SEASON ? activeEvent.eventName ?? activeEvent.eventCode : "Sin evento activo"}</b><span>{activeEvent?.season === FIRST_SEASON ? `Evento FIRST ${FIRST_SEASON} · ${activeEvent.eventCode}` : "Selecciona y confirma un regional para cargar los datos oficiales."}</span>{selectedEvent && <span>{[selectedEvent.venue, selectedEvent.city, selectedEvent.stateProv, selectedEvent.country].filter(Boolean).join(" · ")}</span>}</div>{activeEvent?.season === FIRST_SEASON && <span className="official-badge">EVENTO ACTIVO</span>}</div>
+      {mode === "schedule" && filteredEvents.length > pageSize && <div className="official-schedule-tools"><span>Mostrando {eventPage * pageSize + 1}–{Math.min((eventPage + 1) * pageSize, filteredEvents.length)} de {filteredEvents.length} eventos</span><button className="button button-secondary" disabled={eventPage === 0} onClick={() => setEventPage(value => value - 1)}>Anterior</button><button className="button button-secondary" disabled={(eventPage + 1) * pageSize >= filteredEvents.length} onClick={() => setEventPage(value => value + 1)}>Siguiente</button></div>}
+      {mode === "schedule" && eventsSeason === FIRST_SEASON && events.length > 0 && filteredEvents.length === 0 && <p className="official-attribution">Ningún evento de esta temporada coincide con la búsqueda.</p>}
+      {mode === "events" && <section className="panel official-matches"><div className="panel-head"><div><h2>Eventos de FIRST · FTC 2026–2027</h2><p>{busyEvents ? "Consultando eventos oficiales…" : `${listedEvents.length} eventos disponibles en la temporada FIRST ${FIRST_SEASON}`}</p></div><span className="count-chip">{listedEvents.length}</span></div>{listedEvents.length ? <div className="official-event-list">{listedEvents.map(event => <article className="official-event-row" key={event.id}><div><b>{event.name}</b><span>{event.code}{event.city ? ` · ${event.city}` : ""}{event.stateProv ? ` · ${event.stateProv}` : ""}</span></div>{activeEvent?.eventCode === event.code && <span className="official-badge">ACTIVO</span>}</article>)}</div> : <div className="official-empty">{busyEvents ? "Cargando eventos oficiales de FIRST…" : message || "No hay eventos oficiales disponibles para FIRST 2026."}</div>}</section>}
+      {mode === "schedule" && eventCode && currentEventTeams.length > 0 && <section className="panel official-team-import"><div className="panel-head"><div><h2>Equipos participantes de FIRST</h2><p>{currentEventTeams.length} equipos publicados para este evento.</p></div><button className="button button-primary" onClick={openTeamImportPreview}>Vista previa e importar equipos</button></div>{importSummary && <div className="official-message"><span>{importSummary}</span></div>}{importPreview.length > 0 && <div className="official-team-preview"><div className="official-schedule-tools"><button className="button button-secondary" onClick={() => setSelectedImportNumbers(importPreview.map(team => team.number))}>Seleccionar todos</button><span>{selectedImportNumbers.length} de {importPreview.length} seleccionados</span></div><div className="table-wrap"><table><thead><tr><th>Importar</th><th>Equipo</th><th>Nombre FIRST</th><th>Estado</th></tr></thead><tbody>{importPreview.map(team => <tr key={team.number}><td><input aria-label={`Importar equipo ${team.number}`} type="checkbox" checked={selectedImportNumbers.includes(team.number)} onChange={event => setSelectedImportNumbers(values => event.target.checked ? [...values, team.number] : values.filter(number => number !== team.number))}/></td><td>{team.number}</td><td>{team.name}</td><td>{team.state === "new" ? "Nuevo" : team.state === "updated" ? "Actualizar datos oficiales" : "Ya existe"}</td></tr>)}</tbody></table></div><button className="button button-primary" disabled={!selectedImportNumbers.length} onClick={confirmTeamImport}>Confirmar importación</button></div>}</section>}
+      {mode !== "events" && eventCode && <div className="official-schedule-tools"><label className="field"><span className="field-label">Nivel de torneo</span><select value={level} onChange={event => setLevel(event.target.value as Level)}><option value="qual">Clasificación (qual)</option><option value="playoff">Eliminatorias (playoff)</option></select></label><button className="button button-primary" onClick={() => void refreshSchedule(true)} disabled={busySchedule}><RefreshCw size={15} className={busySchedule ? "spin" : ""}/> {busySchedule ? "Actualizando FIRST…" : mode === "schedule" ? "Actualizar calendario FIRST" : "Actualizar resultados FIRST"}</button><span>{selectionStatus}</span></div>}
       {message && <div className="official-message" role="status">{message.includes("FIRST") || message.includes("fall") || message.includes("Fall") ? <AlertTriangle size={15}/> : <CalendarDays size={15}/>}<span>{message}</span></div>}
     </section>
-    {eventCode && mode !== "events" && eventTeams.length > 0 && <section className="panel official-matches"><div className="panel-head"><div><h2>Teams participantes</h2><p>Equipos oficiales asociados a {selectedEvent?.name ?? eventCode}</p></div><span className="count-chip">{eventTeams.length}</span></div><div className="official-attribution">{eventTeams.map(team => `${String(team.teamNumber ?? "")}${team.nameFull || team.nameShort || team.teamName ? ` · ${String(team.nameFull ?? team.nameShort ?? team.teamName)}` : ""}`).filter(Boolean).join("  /  ")}</div></section>}
-    {eventCode && mode !== "events" && <section className="panel official-matches"><div className="panel-head"><div><h2>{selectedEvent?.name ?? `Evento ${eventCode}`}</h2><p>{mode === "results" ? "Resultados oficiales publicados" : level === "qual" ? "Partidos de clasificación" : "Partidos de eliminatorias"} · {visibleMatches.length} {mode === "results" ? "con resultado" : "recibidos"}</p></div><span className="official-updated">Última consulta correcta: {lastUpdate ?? "aún no descargado"}</span></div>
-      {!currentCache ? <div className="official-empty">Pulsa “Actualizar desde FIRST” para obtener el calendario y los resultados publicados.</div> : visibleMatches.length ? <div className="official-match-list">{visibleMatches.map((match, index) => { const details = currentCache.scoreDetails?.filter(item => item && typeof item === "object" && Number((item as Record<string, unknown>).matchNumber) === match.number) ?? []; return <article className="official-match" key={`${match.id}:${index}`}><div className="official-match-title"><b>{match.description || `${match.level.toUpperCase()} · Partido ${match.number}`}</b><span>{match.status === "played" ? "Disputado · resultado oficial" : match.status === "result_pending" ? "Iniciado · resultado pendiente de publicación" : "Programado · sin resultado"}</span><small>{dateText(match.actualStartTime ?? match.startTime) ?? "Hora no publicada"}</small></div><div className="official-alliance red"><b>ROJO</b><span>{teamList(match.redTeams)}</span><strong>{officialPoints(match.redFinal)}</strong></div><div className="official-alliance blue"><b>AZUL</b><span>{teamList(match.blueTeams)}</span><strong>{officialPoints(match.blueFinal)}</strong></div>{match.status === "played" && <div className="official-score-details"><span>AUTO Rojo: {officialPoints(match.redAuto)}</span><span>TELEOP Rojo: {officialPoints(match.redDriveControlled)}</span><span>Faltas Rojo: {officialPoints(match.redFoul)}</span><span>Endgame Rojo: {officialPoints(match.redEndgame)}</span><span>AUTO Azul: {officialPoints(match.blueAuto)}</span><span>TELEOP Azul: {officialPoints(match.blueDriveControlled)}</span><span>Faltas Azul: {officialPoints(match.blueFoul)}</span><span>Endgame Azul: {officialPoints(match.blueEndgame)}</span></div>}{details.length > 0 && <details className="official-score-details"><summary>Detalles de scoring publicados por FIRST</summary><pre>{JSON.stringify(details, null, 2)}</pre></details>}</article>; })}</div> : <div className="official-empty">{mode === "results" ? "FIRST no ha publicado resultados para este evento y nivel." : "FIRST devolvió un calendario vacío para este nivel."}</div>}
+    <section className="panel official-matches" aria-label="Eventos FIRST disponibles">
+      <div className="panel-head"><div><h2>Eventos regionales disponibles</h2><p>{busyEvents ? "Consultando eventos oficiales…" : `${listedEvents.length} eventos disponibles en la temporada FIRST ${FIRST_SEASON}–${FIRST_SEASON + 1}`}</p></div><span className="count-chip">{listedEvents.length}</span></div>
+      {listedEvents.length ? <div className="official-event-list">{listedEvents.map(event => <article className="official-event-row" key={event.id}><div><b>{event.name}</b><span>{event.code} · {eventTypeLabel(event)}{event.city ? ` · ${event.city}` : ""}{event.stateProv ? ` · ${event.stateProv}` : ""}{event.country ? ` · ${event.country}` : ""}</span></div>{activeEvent?.eventCode === event.code && <span className="official-badge">ACTIVO</span>}</article>)}</div> : <div className="official-empty">{busyEvents ? "Cargando eventos oficiales de FIRST…" : message || "No hay eventos oficiales disponibles para FIRST 2026."}</div>}
+    </section>
+    {mode !== "events" && eventCode && currentEventTeams.length > 0 && <section className="panel official-matches"><div className="panel-head"><div><h2>Equipos participantes</h2><p>Equipos oficiales asociados a {selectedEvent?.name ?? eventCode}</p></div><span className="count-chip">{currentEventTeams.length}</span></div><div className="official-attribution">{currentEventTeams.map(team => `${String(team.teamNumber ?? "")}${team.nameFull || team.nameShort || team.teamName ? ` · ${String(team.nameFull ?? team.nameShort ?? team.teamName)}` : ""}`).filter(Boolean).join("  /  ")}</div></section>}
+    {!eventCode && <section className="panel official-matches" aria-label="Calendario de partidos"><div className="panel-head"><div><h2>Calendario de partidos</h2><p>El calendario aparece al confirmar un evento activo.</p></div></div><div className="official-empty">Selecciona un regional de FIRST para consultar su calendario.</div></section>}
+    {mode !== "events" && eventCode && <section className="panel official-matches" aria-label="Calendario de partidos"><div className="panel-head"><div><h2>Calendario de partidos</h2><p>{selectedEvent?.name ?? `Evento ${eventCode}`} · {level === "qual" ? "Partidos de clasificación" : "Partidos de eliminatorias"} · {visibleMatches.length} recibidos</p></div><span className="official-updated">Última consulta correcta: {lastUpdate ?? "aún no descargado"}</span></div>
+      {!currentCache && busySchedule ? <div className="official-empty">Cargando datos oficiales de {activeEvent?.eventName ?? eventCode}…</div> : !currentCache ? <div className="official-empty">{mode === "results" ? "Aún no hay resultados cargados para este evento." : "No hay calendario cargado para este evento."}</div> : visibleMatches.length ? <div className="official-match-list">{visibleMatches.map((match, index) => { const details = currentCache.scoreDetails?.filter(item => item && typeof item === "object" && Number((item as Record<string, unknown>).matchNumber) === match.number) ?? []; return <article className="official-match" key={`${match.id}:${index}`}><div className="official-match-title"><b>{match.description || `${match.level.toUpperCase()} · Partido ${match.number}`}</b><span>{match.status === "played" ? "Disputado · resultado oficial FIRST" : match.status === "result_pending" ? "Iniciado · resultado pendiente de publicación" : "Programado · sin resultado oficial"}</span><small>{dateText(match.actualStartTime ?? match.startTime) ?? "Hora no publicada"}</small></div><div className="official-alliance red"><b>ROJO</b><span>{teamList(match.redTeams)}</span><strong>{officialPoints(match.redFinal)}</strong></div><div className="official-alliance blue"><b>AZUL</b><span>{teamList(match.blueTeams)}</span><strong>{officialPoints(match.blueFinal)}</strong></div>{match.status === "played" && <div className="official-score-details"><span>AUTO Rojo: {officialPoints(match.redAuto)}</span><span>TELEOP Rojo: {officialPoints(match.redDriveControlled)}</span><span>Faltas Rojo: {officialPoints(match.redFoul)}</span><span>Endgame Rojo: {officialPoints(match.redEndgame)}</span><span>AUTO Azul: {officialPoints(match.blueAuto)}</span><span>TELEOP Azul: {officialPoints(match.blueDriveControlled)}</span><span>Faltas Azul: {officialPoints(match.blueFoul)}</span><span>Endgame Azul: {officialPoints(match.blueEndgame)}</span></div>}{details.length > 0 && <details className="official-score-details"><summary>Detalles de scoring publicados por FIRST</summary><pre>{JSON.stringify(details, null, 2)}</pre></details>}</article>; })}</div> : <div className="official-empty">{mode === "results" ? "FIRST no ha publicado resultados para este evento y nivel." : "FIRST devolvió un calendario vacío para este nivel."}</div>}
     </section>}
+    <section className="panel official-matches" aria-label="Resultados oficiales FIRST">
+      <div className="panel-head"><div><h2>Resultados oficiales FIRST</h2><p>{eventCode ? `${selectedEvent?.name ?? eventCode} · ${officialResults.length} partidos con resultado oficial` : "Selecciona un evento activo para consultar resultados oficiales."}</p></div><span className="official-updated">Solo datos oficiales FIRST</span></div>
+      {!eventCode ? <div className="official-empty">Selecciona un regional para consultar sus resultados oficiales.</div> : !currentCache && busySchedule ? <div className="official-empty">Cargando resultados oficiales de {activeEvent?.eventName ?? eventCode}…</div> : !currentCache || officialResults.length === 0 ? <div className="official-empty">FIRST todavía no ha publicado resultados para este evento y nivel.</div> : <><p className="official-attribution">Estos puntajes son resultados oficiales publicados por FIRST; no son estimaciones individuales de scouting.</p><div className="official-match-list">{officialResults.map(match => <OfficialMatchCard key={match.id} match={match} scoreDetails={currentCache.scoreDetails}/>)}</div></>}
+    </section>
   </>;
 }
