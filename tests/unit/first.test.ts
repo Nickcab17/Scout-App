@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mergeOfficialMatches, normalizeEvents, normalizeHybridSchedule } from "../../lib/first/normalize.ts";
+import { getAllFirstEventPages } from "../../lib/first/event-pagination.ts";
 import { defaultTheme, palettes } from "../../lib/theme.ts";
 
 test("renames only Aztech while retaining all six palette definitions and colors", () => {
@@ -16,6 +17,38 @@ test("normalizes official event fields without requiring optional location or da
     dateStart: "2027-02-01T00:00:00", dateEnd: null, type: null,
   }]);
   assert.deepEqual(normalizeEvents({ events: null }), []);
+});
+
+test("filters mixed FIRST event responses to the requested 2026 season", () => {
+  const events = normalizeEvents({ events: [
+    { eventId: "evt-2026", code: "MABOS", name: "2026 Regional", season: 2026 },
+    { eventId: "evt-2025", code: "OLD25", name: "2025 Regional", season: 2025 },
+  ] }, 2026);
+  assert.deepEqual(events.map(event => event.code), ["MABOS"]);
+});
+
+test("collects every FIRST event page without excluding countries or event types", async () => {
+  const pages = [
+    { pageTotal: 3, events: [{ eventId: "mx-1", code: "MEX01", country: "Mexico", typeName: "Regional Championship" }, { eventId: "us-1", code: "USA01", country: "USA", typeName: "Qualifier" }] },
+    { pageTotal: 3, events: [{ eventId: "ca-1", code: "CAN01", country: "Canada", typeName: "Regional Championship" }] },
+    { pageTotal: 3, events: [{ eventId: "mx-1", code: "MEX01", country: "Mexico", typeName: "Regional Championship" }, { eventId: "br-1", code: "BRA01", country: "Brazil", typeName: "League Tournament" }] },
+  ];
+  const requestedPages: number[] = [];
+  const result = await getAllFirstEventPages(async page => {
+    requestedPages.push(page);
+    return pages[page - 1];
+  });
+
+  assert.deepEqual(requestedPages, [1, 2, 3]);
+  assert.equal(pages[0].events.length, 2);
+  assert.deepEqual(result.events.map(event => (event as { code: string }).code), ["MEX01", "USA01", "CAN01", "BRA01"]);
+  const normalized = normalizeEvents({ events: result.events }, 2026);
+  assert.equal(normalized.find(event => event.code === "MEX01")?.type, "Regional Championship");
+  assert.equal(normalized.find(event => event.code === "BRA01")?.country, "Brazil");
+});
+
+test("rejects malformed FIRST pages instead of silently reporting an empty event list", async () => {
+  await assert.rejects(getAllFirstEventPages(async () => ({ pageTotal: 2 })), /página sin una lista válida/);
 });
 
 test("distinguishes scheduled, pending and zero-point official match results", () => {

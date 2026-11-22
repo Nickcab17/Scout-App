@@ -28,4 +28,8 @@ test("active FIRST event round-trips and normalizes event codes", () => {
     eventId: "evt-1",
     eventName: "Regional A",
   });
+
+  values.set(ACTIVE_FIRST_EVENT_KEY, JSON.stringify({ season: 2025, eventCode: "OLD25" }));
+  assert.equal(readActiveFirstEvent(), null);
+  assert.throws(() => writeActiveFirstEvent({ season: 2025, eventCode: "OLD25" }), /temporada 2026/);
 });

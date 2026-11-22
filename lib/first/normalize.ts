@@ -41,7 +41,7 @@ const obj = (value: unknown): Row => value !== null && typeof value === "object"
 const str = (value: unknown): string | null => typeof value === "string" && value.trim() ? value.trim() : null;
 const num = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
 
-export function normalizeEvents(payload: unknown): OfficialEvent[] {
+export function normalizeEvents(payload: unknown, expectedSeason?: number): OfficialEvent[] {
   const rows = obj(payload).events;
   if (!Array.isArray(rows)) return [];
   return rows.map((raw, index) => {
@@ -53,7 +53,14 @@ export function normalizeEvents(payload: unknown): OfficialEvent[] {
       venue: str(row.venue), address: str(row.address), city: str(row.city), stateProv: str(row.stateprov),
       country: str(row.country), dateStart: str(row.dateStart), dateEnd: str(row.dateEnd), type: str(row.typeName) ?? str(row.type),
     };
-  }).filter(event => event.code.length > 0);
+  }).filter((event, index) => {
+    if (!event.code.length) return false;
+    if (expectedSeason === undefined) return true;
+    const row = obj(rows[index]);
+    const suppliedSeason = row.season ?? row.seasonYear ?? row.seasonCode;
+    const parsedSeason = typeof suppliedSeason === "number" ? suppliedSeason : typeof suppliedSeason === "string" ? Number(suppliedSeason) : null;
+    return parsedSeason === null || !Number.isFinite(parsedSeason) || parsedSeason === expectedSeason;
+  });
 }
 
 export function normalizeHybridSchedule(payload: unknown, season: number, eventCode: string, level: "qual" | "playoff"): OfficialMatch[] {
