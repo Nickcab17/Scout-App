@@ -94,6 +94,16 @@ export function validateImportData(value: unknown): AppData {
       updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date(0).toISOString(),
       scoutName: typeof raw.scoutName === "string" ? raw.scoutName.trim() : undefined,
       scoring: raw.scoring as Observation["scoring"], scoringConfirmed: raw.scoringConfirmed === true,
+      pollenCount: Number.isInteger(raw.pollenCount) ? Number(raw.pollenCount) : undefined,
+      alliance: raw.alliance === "red" || raw.alliance === "blue" ? raw.alliance : undefined,
+      season: Number.isInteger(raw.season) ? Number(raw.season) : undefined,
+      eventCode: typeof raw.eventCode === "string" ? raw.eventCode.toUpperCase() : undefined,
+      tournamentLevel: raw.tournamentLevel === "qual" || raw.tournamentLevel === "playoff" ? raw.tournamentLevel : undefined,
+      officialMatchId: typeof raw.officialMatchId === "string" ? raw.officialMatchId : undefined,
+      capturedAt: typeof raw.capturedAt === "string" ? raw.capturedAt : undefined,
+      actions: isRecord(raw.actions) ? raw.actions as Observation["actions"] : undefined,
+      allianceFinal: isRecord(raw.allianceFinal) ? raw.allianceFinal as Observation["allianceFinal"] : undefined,
+      officialResult: isRecord(raw.officialResult) ? raw.officialResult as Observation["officialResult"] : undefined,
     };
   });
   if (new Set(observations.map(item => item.id)).size !== observations.length ||
@@ -128,7 +138,10 @@ export function mergeLegacyData(current: AppData, incoming: AppData) {
   for (const item of incoming.observations) {
     const old = observations.find(value => value.id === item.id || (value.matchId === item.matchId && value.teamNumber === item.teamNumber));
     if (!old) { observations.push(item); insertedObservations++; }
-    else if (old.matchId !== item.matchId || old.teamNumber !== item.teamNumber || old.status !== item.status || old.auto !== item.auto || old.teleop !== item.teleop || JSON.stringify(old.scoring ?? null) !== JSON.stringify(item.scoring ?? null)) throw new Error(`Conflicto en la observación del equipo ${item.teamNumber}; no se sobrescribió.`);
+    else if (old.matchId !== item.matchId || old.teamNumber !== item.teamNumber || old.status !== item.status || old.auto !== item.auto || old.teleop !== item.teleop ||
+      JSON.stringify(old.scoring ?? null) !== JSON.stringify(item.scoring ?? null) ||
+      JSON.stringify(old.actions ?? null) !== JSON.stringify(item.actions ?? null) ||
+      JSON.stringify(old.allianceFinal ?? null) !== JSON.stringify(item.allianceFinal ?? null)) throw new Error(`Conflicto en la observación del equipo ${item.teamNumber}; no se sobrescribió.`);
   }
   return { data: { teams, matches, observations }, inserted: { teams: insertedTeams, matches: insertedMatches, observations: insertedObservations } };
 }

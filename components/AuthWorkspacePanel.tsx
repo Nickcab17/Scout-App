@@ -16,6 +16,9 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
   const [configured, setConfigured] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [authMode, setAuthMode] = useState<"sign_in"|"sign_up"|"forgot">("sign_in");
   const [user, setUser] = useState("");
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selected, setSelected] = useState("");
@@ -70,15 +73,30 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
     event.preventDefault();
     const client = createSupabaseBrowserClient();
     if (!client) return;
+    if (mode === "sign_up" && displayName.trim().length < 2) { setStatus("Ingresa tu nombre."); return; }
+    if (mode === "sign_up" && password !== confirmPassword) { setStatus("Las contraseñas no coinciden."); return; }
     setBusy(true); setStatus("");
     try {
       const result = mode === "sign_up"
-        ? await client.auth.signUp({ email, password, options: { emailRedirectTo: `${location.origin}/auth/callback` } })
+        ? await client.auth.signUp({ email, password, options: { emailRedirectTo: `${location.origin}/auth/callback`, data: { display_name: displayName.trim() } } })
         : await client.auth.signInWithPassword({ email, password });
       if (result.error) throw result.error;
       setStatus(mode === "sign_up" && !result.data.session ? "Revisa tu correo para confirmar la cuenta." : "Sesión iniciada.");
       await refresh();
     } catch (error) { setStatus(error instanceof Error ? error.message : "No se pudo autenticar."); }
+    finally { setBusy(false); }
+  }
+
+  async function sendRecovery(event: FormEvent) {
+    event.preventDefault();
+    const client = createSupabaseBrowserClient();
+    if (!client) return;
+    setBusy(true); setStatus("");
+    try {
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: `${location.origin}/auth/callback?next=/auth/recovery` });
+      if (error) throw error;
+      setStatus("Revisa tu correo. BioBuzz te enviará un enlace seguro para establecer una contraseña nueva.");
+    } catch (error) { setStatus(error instanceof Error ? error.message : "No se pudo enviar la recuperación."); }
     finally { setBusy(false); }
   }
 
@@ -176,14 +194,22 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
   return <section className="panel workspace-panel">
     <div className="panel-head"><div><h2>Cuenta y espacio de trabajo</h2><p>Autenticación y persistencia por grupo</p></div></div>
     {!configured ? <div className="scoring-status"><b>Supabase no está configurado.</b><p>Define NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY, aplica la migración SQL y reinicia Next.js.</p></div>
-      : !user ? <form className="form-stack" onSubmit={event => void auth(event, "sign_in")}>
-        <label className="field"><span>Correo</span><input type="email" required value={email} onChange={event => setEmail(event.target.value)}/></label>
-        <label className="field"><span>Contraseña</span><input type="password" required minLength={8} value={password} onChange={event => setPassword(event.target.value)}/></label>
-        <div className="form-foot"><span>Sin sesión, se mantienen los datos locales.</span><div>
-          <button className="button button-secondary" disabled={busy} type="button" onClick={event => void auth(event, "sign_up")}>Crear cuenta</button>
-          <button className="button button-primary" disabled={busy}>Iniciar sesión</button>
-        </div></div>
-      </form> : <>
+      : !user ? <>
+        {authMode === "forgot" ? <form className="form-stack" onSubmit={sendRecovery}>
+          <div className="auth-form-heading"><b>Recuperar contraseña</b><span>Ingresa tu correo para recibir un enlace seguro de Supabase.</span></div>
+          <label className="field"><span>Correo electrónico</span><input type="email" required value={email} onChange={event => setEmail(event.target.value)} placeholder="scout@ejemplo.com"/></label>
+          <div className="form-foot"><button className="text-button" type="button" onClick={()=>setAuthMode("sign_in")}>Volver a iniciar sesión</button><button className="button button-primary" disabled={busy}>Enviar enlace</button></div>
+        </form> : <form className="form-stack" onSubmit={event => void auth(event, authMode)}>
+          {authMode === "sign_up" && <label className="field"><span>Nombre</span><input required minLength={2} value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder="Nombre del scout"/></label>}
+          <label className="field"><span>Correo electrónico</span><input type="email" required value={email} onChange={event => setEmail(event.target.value)} placeholder="scout@ejemplo.com"/></label>
+          <label className="field"><span>Contraseña</span><input type="password" required minLength={8} value={password} onChange={event => setPassword(event.target.value)}/></label>
+          {authMode === "sign_up" && <label className="field"><span>Confirmar contraseña</span><input type="password" required minLength={8} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)}/></label>}
+          <div className="form-foot">
+            <div className="auth-links">{authMode === "sign_in" ? <><button className="text-button" type="button" onClick={()=>setAuthMode("sign_up")}>Crear cuenta</button><button className="text-button" type="button" onClick={()=>setAuthMode("forgot")}>¿Olvidaste tu contraseña?</button></> : <button className="text-button" type="button" onClick={()=>setAuthMode("sign_in")}>Ya tengo una cuenta</button>}</div>
+            <button className="button button-primary" disabled={busy}>{authMode === "sign_up" ? "Crear cuenta" : "Iniciar sesión"}</button>
+          </div>
+        </form>}
+      </> : <>
         <p>Sesión: <b>{user}</b> <button className="text-button" onClick={() => void signOut()}>Cerrar sesión</button></p>
         <form className="form-foot" onSubmit={event => void createWorkspace(event)}><input aria-label="Nombre del grupo" placeholder="Nombre del grupo" value={name} onChange={event => setName(event.target.value)}/><button className="button button-secondary" disabled={busy}>Crear grupo</button></form>
         <div className="form-stack">{workspaces.map(group => <div key={group.id} className="team-row"><div className="row-main"><b>{group.name}</b><span>Rol: {group.role}</span></div><button className="button button-primary" disabled={busy} onClick={() => void enterWorkspace(group.id)}>Abrir</button></div>)}</div>

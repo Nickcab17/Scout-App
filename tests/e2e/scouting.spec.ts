@@ -90,3 +90,23 @@ test("applies and remembers appearance preferences in this browser", async ({ pa
   await page.reload();
   await expect.poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue("--bg"))).toBe("#0e171d");
 });
+
+test("switches FTC and FRC modes and removes the Quality card", async ({ page }) => {
+  await expect(page.getByText("Calidad de datos")).toHaveCount(0);
+  await page.getByRole("button", { name: "FRC" }).click();
+  await expect(page.getByText("Coming Soon...")).toBeVisible();
+  await page.getByRole("button", { name: "Volver a FTC" }).click();
+  await expect(page.getByRole("heading", { name: "Centro de scouting" })).toBeVisible();
+});
+
+test("shows independent pollen and nectar flower counters", async ({ page }) => {
+  await page.getByRole("button", { name: "Match Scouting" }).click();
+  await page.getByRole("tab", { name: "TELEOP" }).click();
+  await expect(page.getByText("POLLEN", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("NECTAR", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("FLOWER 1", { exact: true })).toBeVisible();
+  await expect(page.getByText("FLOWER 2", { exact: true })).toBeVisible();
+  await expect(page.getByText("FLOWER 3", { exact: true })).toBeVisible();
+  await expect(page.getByText("FLOWER 4", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Ayuda: POLLEN lanzado hacia CELLS" })).toBeVisible();
+});
