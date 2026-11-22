@@ -79,6 +79,7 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
     const timer = setTimeout(() => {
       try {
         const raw = localStorage.getItem(KEY);
+        const active = readActiveFirstEvent();
         if (raw) {
           const parsed = JSON.parse(raw) as Partial<Store>;
           const next = {
@@ -86,7 +87,6 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
             schedules: parsed.schedules && typeof parsed.schedules === "object" && !Array.isArray(parsed.schedules) ? parsed.schedules : {},
           };
           setStore(next);
-          const active = readActiveFirstEvent();
           const localSelection = next.selections[scope];
           const selection = active ?? (localSelection ? { season: normalizeSeason(localSelection.season), eventCode: localSelection.eventCode } : null);
           if (selection) {
@@ -95,6 +95,11 @@ export default function OfficialEventsPanel({ mode = "events" }: { mode?: "event
             setPendingEventCode(selection.eventCode);
             setActiveEvent(selection);
           }
+        } else if (active) {
+          setSeason(normalizeSeason(active.season));
+          setEventCode(active.eventCode);
+          setPendingEventCode(active.eventCode);
+          setActiveEvent(active);
         }
       } catch { setMessage("No se pudo leer el historial local de eventos FIRST."); }
     }, 0);

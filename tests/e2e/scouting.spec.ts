@@ -129,6 +129,49 @@ test("confirms one active FIRST event and preserves it after reload", async ({ p
       { id: "evt-b", code: "TESTB", name: "Regional B", city: "Boston" },
     ], syncedAt: new Date().toISOString() }),
   }));
+  await page.route("**/api/first/events/TESTA/teams?*", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ teams: [
+      { teamNumber: 9101, nameFull: "A Red 1" }, { teamNumber: 9102, nameFull: "A Red 2" },
+      { teamNumber: 9201, nameFull: "A Blue 1" }, { teamNumber: 9202, nameFull: "A Blue 2" },
+      { teamNumber: 9999, nameFull: "A Outside" },
+    ] }),
+  }));
+  await page.route("**/api/first/events/TESTB/teams?*", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ teams: [
+      { teamNumber: 8101, nameFull: "B Red 1" }, { teamNumber: 8102, nameFull: "B Red 2" },
+      { teamNumber: 8201, nameFull: "B Blue 1" }, { teamNumber: 8202, nameFull: "B Blue 2" },
+    ] }),
+  }));
+  await page.route("**/api/first/events/TESTA/schedule?*", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ matches: [{
+      id: "2026:TESTA:qual:0:14", level: "qual", series: 0, number: 14, description: "A Qualification 14",
+      redTeams: [{ number: 9101, name: "A Red 1" }, { number: 9102, name: "A Red 2" }],
+      blueTeams: [{ number: 9201, name: "A Blue 1" }, { number: 9202, name: "A Blue 2" }],
+      redFinal: 100, blueFinal: 90, status: "played",
+    }], syncedAt: new Date().toISOString(), persisted: false }),
+  }));
+  await page.route("**/api/first/events/TESTB/schedule?*", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ matches: [{
+      id: "2026:TESTB:qual:0:24", level: "qual", series: 0, number: 24, description: "B Qualification 24",
+      redTeams: [{ number: 8101, name: "B Red 1" }, { number: 8102, name: "B Red 2" }],
+      blueTeams: [{ number: 8201, name: "B Blue 1" }, { number: 8202, name: "B Blue 2" }],
+      redFinal: 200, blueFinal: 180, status: "played",
+    }], syncedAt: new Date().toISOString(), persisted: false }),
+  }));
+  await page.route("**/api/first/events/TESTA/results/**", route => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ matches: [] }),
+  }));
+  await page.route("**/api/first/events/TESTB/results/**", route => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify({ matches: [] }),
+  }));
 
   await page.getByRole("button", { name: "Events" }).click();
   await page.getByRole("combobox", { name: "Evento oficial" }).selectOption("TESTA");
@@ -144,4 +187,49 @@ test("confirms one active FIRST event and preserves it after reload", async ({ p
   await page.reload();
   await page.getByRole("button", { name: "Match Schedule" }).click();
   await expect(page.getByText("Evento activo:", { exact: false })).toContainText("Regional A");
+
+  await page.evaluate(() => {
+    const data = JSON.parse(localStorage.getItem("biobuzz-scout-v1") || '{"teams":[],"matches":[],"observations":[]}');
+    data.observations.push({
+      id: "obs-a", matchId: "match-a", teamNumber: 9101, status: "submitted",
+      auto: "", teleop: "", hiveTip: "", pollen: "3", nectar: "", flowerGarden: "", leavePark: "", issues: "", notes: "Regional A preserved",
+      updatedAt: new Date().toISOString(), pollenCount: 3, alliance: "red", season: 2026, eventCode: "TESTA", tournamentLevel: "qual", officialMatchId: "2026:TESTA:qual:0:14",
+    });
+    localStorage.setItem("biobuzz-scout-v1", JSON.stringify(data));
+  });
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations?.length ?? 0)).toBe(1);
+  await page.reload();
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations?.length ?? 0)).toBe(1);
+
+  await page.getByRole("button", { name: "Events" }).click();
+  await page.getByRole("combobox", { name: "Evento oficial" }).selectOption("TESTB");
+  await page.getByRole("button", { name: "Confirmar evento activo" }).click();
+  await expect(page.getByText("Evento activo:", { exact: false })).toContainText("Regional B");
+
+  await page.getByRole("button", { name: "Match Schedule" }).click();
+  await expect(page.getByText("B Qualification 24", { exact: false })).toBeVisible();
+  await expect(page.getByText("A Qualification 14", { exact: false })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Official Results" }).click();
+  await expect(page.getByText("B Qualification 24", { exact: false })).toBeVisible();
+  await expect(page.getByText("A Qualification 14", { exact: false })).toHaveCount(0);
+  await expect(page.getByText("200", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("100", { exact: true })).toHaveCount(0);
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations?.length ?? 0)).toBe(1);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Match Schedule" }).click();
+  await expect(page.getByText("Evento activo:", { exact: false })).toContainText("Regional B");
+  await expect(page.getByText("B Qualification 24", { exact: false })).toBeVisible();
+
+  await page.getByRole("button", { name: "Match Scouting" }).click();
+  await page.getByLabel("Partido oficial").selectOption({ index: 1 });
+  const robotOptions = await page.getByLabel("Equipo participante observado").locator("option").allTextContents();
+  expect(robotOptions.join(" ")).toContain("8101");
+  expect(robotOptions.join(" ")).toContain("8202");
+  expect(robotOptions.join(" ")).not.toContain("9101");
+  expect(robotOptions.join(" ")).not.toContain("9999");
+
+  const preserved = await page.evaluate(() => JSON.parse(localStorage.getItem("biobuzz-scout-v1") || "{}").observations);
+  expect(preserved.some((observation: { eventCode?: string }) => observation.eventCode === "TESTA")).toBe(true);
 });

@@ -172,12 +172,30 @@ export default function FirstMatchScouting({ data, setData }: Props) {
     const requestedEventCode = code.toUpperCase();
     setLoading(true); setError(""); setSaved(""); setMatches([]); setMatchId(""); setTeamNumber("");
     try {
-      const [teamResponse, qualResponse, playoffResponse] = await Promise.all([
-        fetch(`/api/first/events/${encodeURIComponent(code)}/teams?season=${season}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" }),
-        fetch(`/api/first/events/${encodeURIComponent(code)}/schedule?season=${season}&level=qual${refresh ? "&refresh=1" : ""}`, { cache: "no-store" }),
-        fetch(`/api/first/events/${encodeURIComponent(code)}/schedule?season=${season}&level=playoff${refresh ? "&refresh=1" : ""}`, { cache: "no-store" }),
+      let cachedStore: { schedules?: Record<string, { matches?: OfficialMatch[] }> } = {};
+      try {
+        const raw = localStorage.getItem("biobuzz-first-v1");
+        if (raw) cachedStore = JSON.parse(raw) as { schedules?: Record<string, { matches?: OfficialMatch[] }> };
+      } catch {}
+
+      const teamResponse = await fetch(`/api/first/events/${encodeURIComponent(code)}/teams?season=${season}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" });
+      const teamPayload = await teamResponse.json();
+      const qualKey = `${requestedSeason}:${requestedEventCode}:qual`;
+      const playoffKey = `${requestedSeason}:${requestedEventCode}:playoff`;
+      const cachedQual = !refresh ? cachedStore.schedules?.[qualKey]?.matches : undefined;
+      const cachedPlayoff = !refresh ? cachedStore.schedules?.[playoffKey]?.matches : undefined;
+
+      const scheduleResponse = async (level: "qual" | "playoff", cached: OfficialMatch[] | undefined) => {
+        if (cached?.length) return { ok: true, payload: { matches: cached } };
+        const response = await fetch(`/api/first/events/${encodeURIComponent(code)}/schedule?season=${season}&level=${level}${refresh ? "&refresh=1" : ""}`, { cache: "no-store" });
+        return { ok: response.ok, payload: await response.json() };
+      };
+      const [qualResponse, playoffResponse] = await Promise.all([
+        scheduleResponse("qual", cachedQual),
+        scheduleResponse("playoff", cachedPlayoff),
       ]);
-      const [teamPayload, qualPayload, playoffPayload] = await Promise.all([teamResponse.json(), qualResponse.json(), playoffResponse.json()]);
+      const qualPayload = qualResponse.payload;
+      const playoffPayload = playoffResponse.payload;
       const active = readActiveFirstEvent();
       if (active && (active.season !== requestedSeason || active.eventCode !== requestedEventCode)) return;
       if (!teamResponse.ok) throw new Error(teamPayload.error || "FIRST no pudo consultar los equipos del evento.");
