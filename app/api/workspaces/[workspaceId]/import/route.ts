@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { mergeLegacyData } from "@/lib/import-validation";
 import { validateImport } from "@/lib/persistence";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { canWriteWorkspace, getWorkspaceRole } from "@/lib/supabase/workspace-access";
 import { AppData } from "@/lib/types";
 type Context={params:Promise<{workspaceId:string}>};
 export async function POST(request:Request,{params}:Context){
  const supabase=await createSupabaseServerClient();if(!supabase)return NextResponse.json({error:"Supabase no está configurado."},{status:503});
  const {data:{user},error:authError}=await supabase.auth.getUser();if(authError||!user)return NextResponse.json({error:"Inicia sesión."},{status:401});
- const {workspaceId}=await params;let body:unknown;try{body=await request.json();}catch{return NextResponse.json({error:"JSON inválido."},{status:400});}
+ const {workspaceId}=await params;const role=await getWorkspaceRole(supabase,workspaceId,user.id);if(!role)return NextResponse.json({error:"No tienes acceso a este espacio de trabajo."},{status:403});if(!canWriteWorkspace(role))return NextResponse.json({error:"Tu rol tiene permisos de solo lectura."},{status:403});let body:unknown;try{body=await request.json();}catch{return NextResponse.json({error:"JSON inválido."},{status:400});}
  let incoming:AppData;try{incoming=validateImport((body as {data?:unknown})?.data);}catch(e){return NextResponse.json({error:e instanceof Error?e.message:"Datos inválidos."},{status:400});}
  const [t,m,o]=await Promise.all([supabase.from("teams").select("id,number,name,capabilities,autonomous,mechanical,notes,status,created_at").eq("workspace_id",workspaceId),supabase.from("matches").select("id,number,event,event_type,teams,season,event_code,tournament_level,official_match_id,created_at").eq("workspace_id",workspaceId),supabase.from("observations").select("id,match_id,team_number,status,auto,teleop,hive_tip,pollen,nectar,flower_garden,leave_park,issues,notes,scout_name,scoring_input,captured_at,pollen_count,alliance,season,event_code,tournament_level,official_match_id,actions,alliance_final,scoring_confirmed,official_result,updated_at").eq("workspace_id",workspaceId)]);
  const dbError=t.error||m.error||o.error;if(dbError)return NextResponse.json({error:"No se pudieron validar datos existentes del grupo."},{status:403});

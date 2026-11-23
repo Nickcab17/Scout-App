@@ -2,9 +2,37 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { getSupabasePublicConfig } from "./config";
 
+const publicPages = new Set(["/login", "/auth/recovery", "/auth/callback"]);
+const publicApi = (pathname: string) =>
+  pathname === "/api/first/seasons" ||
+  pathname === "/api/first/events" ||
+  pathname.startsWith("/api/first/events/");
+
+function unauthenticatedResponse(request: NextRequest) {
+  if (request.nextUrl.pathname.startsWith("/api/")) {
+    return NextResponse.json({ error: "Se requiere una sesión válida." }, { status: 401 });
+  }
+  const loginUrl = new URL("/login", request.url);
+  loginUrl.searchParams.set("next", `${request.nextUrl.pathname}${request.nextUrl.search}`);
+  return NextResponse.redirect(loginUrl);
+}
+
 export async function updateSupabaseSession(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+  const isPublicPage = publicPages.has(pathname);
+  if (isPublicPage || publicApi(pathname)) {
+    const config = getSupabasePublicConfig();
+    if (!config) return NextResponse.next({ request });
+  }
+
   const config = getSupabasePublicConfig();
-  if (!config) return NextResponse.next({ request });
+  if (!config) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Supabase no está configurado." }, { status: 503 });
+    }
+    return NextResponse.redirect(new URL("/login?configuration=required", request.url));
+  }
+
   let response = NextResponse.next({ request });
   const supabase = createServerClient(config.url, config.anonKey, {
     cookies: {
@@ -16,6 +44,10 @@ export async function updateSupabaseSession(request: NextRequest) {
       },
     },
   });
-  await supabase.auth.getClaims();
+  const { data: { claims }, error } = await supabase.auth.getClaims();
+  if (!isPublicPage && !publicApi(pathname) && (error || typeof claims?.sub !== "string")) {
+    return unauthenticatedResponse(request);
+  }
+  response.headers.set("Cache-Control", "private, no-store");
   return response;
 }

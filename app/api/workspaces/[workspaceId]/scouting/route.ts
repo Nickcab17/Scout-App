@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { validateImport } from "@/lib/persistence";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { canWriteWorkspace, getWorkspaceRole } from "@/lib/supabase/workspace-access";
 import { AppData } from "@/lib/types";
 
 type Context = { params: Promise<{ workspaceId: string }> };
@@ -18,6 +19,8 @@ export async function GET(_request: Request, { params }: Context) {
   const auth = await authenticatedClient();
   if ("error" in auth) return auth.error;
   const { workspaceId } = await params;
+  const role = await getWorkspaceRole(auth.supabase, workspaceId, auth.user.id);
+  if (!role) return fail("No tienes acceso a este espacio de trabajo.", 403);
   const [teamsResult, matchesResult, observationsResult] = await Promise.all([
     auth.supabase.from("teams").select("id,number,name,capabilities,autonomous,mechanical,notes,status,created_at").eq("workspace_id", workspaceId),
     auth.supabase.from("matches").select("id,number,event,event_type,teams,season,event_code,tournament_level,official_match_id,created_at").eq("workspace_id", workspaceId),
@@ -37,6 +40,9 @@ export async function PUT(request: Request, { params }: Context) {
   const auth = await authenticatedClient();
   if ("error" in auth) return auth.error;
   const { workspaceId } = await params;
+  const role = await getWorkspaceRole(auth.supabase, workspaceId, auth.user.id);
+  if (!role) return fail("No tienes acceso a este espacio de trabajo.", 403);
+  if (!canWriteWorkspace(role)) return fail("Tu rol tiene permisos de solo lectura.", 403);
   let body: unknown;
   try { body = await request.json(); } catch { return fail("Solicitud JSON inválida."); }
   if (typeof body !== "object" || body === null || !("data" in body)) return fail("Falta el contenido de scouting.");

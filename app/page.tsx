@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, AlertTriangle, ArrowDownToLine, BarChart3, CalendarDays, Check, ChevronDown, ClipboardList, Database, FilePlus2, Gauge, Layers3, Menu, Plus, Search, Settings2, ShieldCheck, Swords, Target, Trash2, Users, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Activity, AlertTriangle, ArrowDownToLine, BarChart3, CalendarDays, Check, ChevronDown, ClipboardList, Database, FilePlus2, Gauge, Layers3, LogOut, Menu, Plus, Search, Settings2, ShieldCheck, Swords, Target, Trash2, Users, X } from "lucide-react";
 import BrandMark from "@/components/BrandMark";
 import AppearanceSettings from "@/components/AppearanceSettings";
 import ThemeInitializer from "@/components/ThemeInitializer";
@@ -12,10 +13,12 @@ import AllianceSelectionPanel from "@/components/AllianceSelectionPanel";
 import FirstMatchScouting from "@/components/FirstMatchScouting";
 import { AppData, emptyData, Match, Observation, Team } from "@/lib/types";
 import { BIOBUZZ_RULES, emptyRobotScoutingInput, EventType } from "@/lib/scoring";
-import { exportData, readData, validateImport, writeData } from "@/lib/persistence";
+import { exportData, readData, validateImport } from "@/lib/persistence";
 import { findImportConflict } from "@/lib/import-validation";
 import { importOfficialTeams, type OfficialTeam } from "@/lib/first/team-import";
 import { readActiveFirstEvent, writeActiveFirstEvent, type ActiveFirstEvent } from "@/lib/first/active-event";
+import { signOutSupabase } from "@/lib/supabase/browser-auth";
+import { ACTIVE_WORKSPACE_STORAGE_KEY } from "@/lib/workspaces/constants";
 
 type ScoutingMatchOption = { id:string; season:number; eventCode:string; level:"qual"|"playoff"; number:number; description:string|null; redTeams:{number:number;name:string|null}[]; blueTeams:{number:number;name:string|null}[] };
 type Page = "dashboard" | "scouting" | "first-scouting" | "teams" | "pit" | "first-events" | "analytics" | "alliance" | "settings";
@@ -27,27 +30,100 @@ const nav: { id: Page; label: string; icon: typeof Activity }[] = [
 const uid = () => crypto.randomUUID();
 
 export default function Home() {
-  const [data, setData] = useState<AppData>(emptyData); const [page, setPage] = useState<Page>("dashboard"); const [ready, setReady] = useState(false);
+  const router = useRouter();
+  const [data, setDataState] = useState<AppData>(emptyData); const [page, setPage] = useState<Page>("dashboard"); const [ready, setReady] = useState(false);
   const [competitionMode, setCompetitionMode] = useState<"ftc"|"frc">("ftc");
   const [activeFirstEvent, setActiveFirstEvent] = useState<ActiveFirstEvent | null>(null);
-  const [toast, setToast] = useState(""); const [editingTeam, setEditingTeam] = useState<Team | null>(null); const [selectedMatch, setSelectedMatch] = useState(""); const [robotIndex, setRobotIndex] = useState(0);
-  const [workspaceId,setWorkspaceId]=useState(""); const [remoteReady,setRemoteReady]=useState(false); const [syncState,setSyncState]=useState("local"); const remoteSnapshot=useRef<AppData>(emptyData);
+  const [toast, setToast] = useState(""); const [loadingError, setLoadingError] = useState(""); const [loadAttempt, setLoadAttempt] = useState(0); const [editingTeam, setEditingTeam] = useState<Team | null>(null); const [selectedMatch, setSelectedMatch] = useState(""); const [robotIndex, setRobotIndex] = useState(0);
+  const [workspaceId,setWorkspaceId]=useState(""); const [workspaceName,setWorkspaceName]=useState(""); const [workspaceRole,setWorkspaceRole]=useState(""); const [userEmail,setUserEmail]=useState(""); const [remoteReady,setRemoteReady]=useState(false); const [syncState,setSyncState]=useState("loading"); const remoteSnapshot=useRef<AppData>(emptyData);
   const [teamNo, setTeamNo] = useState(""); const [teamName, setTeamName] = useState(""); const [teamCapabilities, setTeamCapabilities] = useState(""); const [teamAuto, setTeamAuto] = useState(""); const [teamMechanical, setTeamMechanical] = useState(""); const [teamNotes, setTeamNotes] = useState(""); const [teamStatus, setTeamStatus] = useState<Team["status"]>("pending"); const [teamCapabilitiesSource,setTeamCapabilitiesSource]=useState<Team["capabilitiesSource"]>("unknown"); const [teamAutonomousSource,setTeamAutonomousSource]=useState<Team["autonomousSource"]>("unknown"); const [teamMechanicalSource,setTeamMechanicalSource]=useState<Team["mechanicalSource"]>("unknown");
   const [matchNo, setMatchNo] = useState(""); const [event, setEvent] = useState(""); const [positions, setPositions] = useState<[string,string,string,string]>(["","","",""]);
   const [eventType, setEventType] = useState<EventType>("not_configured"); const [scoringInput, setScoringInput] = useState(emptyRobotScoutingInput); const [scoringConfirmed, setScoringConfirmed] = useState(false); const [scoutName, setScoutName] = useState("");
   const [form, setForm] = useState({ auto:"", teleop:"", hiveTip:"", pollen:"", nectar:"", flowerGarden:"", leavePark:"", issues:"", notes:"" }); const [officialMatchOptions,setOfficialMatchOptions]=useState<ScoutingMatchOption[]>([]); const [selectedOfficialMatchId,setSelectedOfficialMatchId]=useState("");
   const [query, setQuery] = useState(""); const [importPreview, setImportPreview] = useState<AppData | null>(null); const [message, setMessage] = useState("");
-  // Browser storage is unavailable during SSR; restore it after hydration.
   useEffect(() => {
     const timer = setTimeout(() => {
-      setData(readData());
       setActiveFirstEvent(readActiveFirstEvent());
       const savedMode = localStorage.getItem("biobuzz-competition-mode");
       if (savedMode === "frc") setCompetitionMode("frc");
-      setReady(true);
     }, 0);
     return () => clearTimeout(timer);
   }, []);
+  const setData = useCallback<React.Dispatch<React.SetStateAction<AppData>>>((update) => {
+    if (remoteReady && workspaceRole === "viewer") {
+      setToast("Tu rol permite consultar los datos, pero no modificarlos.");
+      return;
+    }
+    setDataState(update);
+  }, [remoteReady, workspaceRole]);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadWorkspace() {
+      const selectedWorkspaceId = localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+      if (!selectedWorkspaceId) {
+        router.replace("/login?workspace=required");
+        return;
+      }
+      try {
+        const membershipsResponse = await fetch("/api/workspaces", { cache: "no-store" });
+        if (membershipsResponse.status === 401) {
+          localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+          router.replace("/login");
+          return;
+        }
+        if (!membershipsResponse.ok) throw new Error("No se pudieron validar tus espacios de trabajo.");
+        const memberships = await membershipsResponse.json() as {
+          workspaces?: { id: string; name: string; role: string }[];
+          user?: { email?: string | null };
+        };
+        const membership = memberships.workspaces?.find(item => item.id === selectedWorkspaceId);
+        if (!membership || !["admin", "scout", "viewer"].includes(membership.role)) {
+          localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+          router.replace("/login?workspace=unavailable");
+          return;
+        }
+        const dataResponse = await fetch(`/api/workspaces/${encodeURIComponent(selectedWorkspaceId)}/scouting`, { cache: "no-store" });
+        if (dataResponse.status === 401) {
+          localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+          router.replace("/login");
+          return;
+        }
+        if (dataResponse.status === 403 || dataResponse.status === 404) {
+          localStorage.removeItem("biobuzz-active-workspace-v1");
+          router.replace("/login?workspace=unavailable");
+          return;
+        }
+        if (!dataResponse.ok) throw new Error("No se pudieron cargar los datos del espacio de trabajo.");
+        const result = await dataResponse.json() as { data: unknown };
+        const remoteData = validateImport(result.data);
+        if (cancelled) return;
+        remoteSnapshot.current = remoteData;
+        setDataState(remoteData);
+        setWorkspaceId(selectedWorkspaceId);
+        setWorkspaceName(membership.name);
+        setWorkspaceRole(membership.role);
+        setUserEmail(memberships.user?.email || "");
+        setSelectedMatch(remoteData.matches[0]?.id || "");
+        setRemoteReady(true);
+        setSyncState("saved");
+        setReady(true);
+      } catch (error) {
+        if (!cancelled) setLoadingError(error instanceof Error ? error.message : "No se pudo validar el espacio de trabajo.");
+      }
+    }
+    void loadWorkspace();
+    return () => { cancelled = true; };
+  }, [router, loadAttempt]);
+  useEffect(() => {
+    function revalidateRestoredPage(event: PageTransitionEvent) {
+      if (!event.persisted) return;
+      void fetch("/api/workspaces", { cache: "no-store" }).then(response => {
+        if (response.status === 401) router.replace("/login");
+      });
+    }
+    window.addEventListener("pageshow", revalidateRestoredPage);
+    return () => window.removeEventListener("pageshow", revalidateRestoredPage);
+  }, [router]);
   useEffect(() => {
     function handleActiveEvent(event: Event) {
       const selection = (event as CustomEvent<ActiveFirstEvent>).detail;
@@ -63,10 +139,24 @@ export default function Home() {
       window.removeEventListener("storage", handleStorage);
     };
   }, []);
+  useEffect(() => {
+    function handleWorkspaceSelected(event: Event) {
+      const selection = (event as CustomEvent<{ id: string; data: AppData; role: string; name: string }>).detail;
+      if (!selection?.id) return;
+      remoteSnapshot.current = selection.data;
+      setWorkspaceId(selection.id);
+      setWorkspaceName(selection.name);
+      setWorkspaceRole(selection.role);
+      setDataState(selection.data);
+      setSelectedMatch(selection.data.matches[0]?.id || "");
+      setRemoteReady(true);
+      setSyncState("saved");
+      setReady(true);
+    }
+    window.addEventListener("biobuzz:workspace-selected", handleWorkspaceSelected);
+    return () => window.removeEventListener("biobuzz:workspace-selected", handleWorkspaceSelected);
+  }, []);
   function loadObservation(found?:Observation){setForm(found?{auto:found.auto,teleop:found.teleop,hiveTip:found.hiveTip,pollen:found.pollen,nectar:found.nectar,flowerGarden:found.flowerGarden,leavePark:found.leavePark,issues:found.issues,notes:found.notes}:{auto:"",teleop:"",hiveTip:"",pollen:"",nectar:"",flowerGarden:"",leavePark:"",issues:"",notes:""});setScoringInput(found?.scoring||emptyRobotScoutingInput());setScoringConfirmed(found?.scoringConfirmed||false);setScoutName(found?.scoutName||"");}
-  // Persist state changes to this browser's local storage.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { if (ready&&!remoteReady) { try { writeData(data); } catch { setToast("No se pudo guardar. Revisa el almacenamiento disponible."); } } }, [data, ready,remoteReady]);
   useEffect(() => {
     function handleFirstTeamImport(event: Event) {
       const detail = (event as CustomEvent<{ teams: OfficialTeam[]; season: number; eventCode: string; selectedNumbers: number[] }>).detail;
@@ -76,7 +166,7 @@ export default function Home() {
     }
     window.addEventListener("biobuzz:import-first-teams", handleFirstTeamImport);
     return () => window.removeEventListener("biobuzz:import-first-teams", handleFirstTeamImport);
-  }, []);
+  }, [setData]);
   useEffect(()=>{if(!ready||!remoteReady||!workspaceId)return;let cancelled=false;const timer=setTimeout(async()=>{setSyncState("saving");const ids=(key:"teams"|"matches"|"observations")=>remoteSnapshot.current[key].filter(old=>!data[key].some(item=>item.id===old.id)).map(item=>item.id);try{const response=await fetch(`/api/workspaces/${workspaceId}/scouting`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({data,deleteIds:{teams:ids("teams"),matches:ids("matches"),observations:ids("observations")}})});if(!response.ok)throw new Error();if(!cancelled){remoteSnapshot.current=data;setSyncState("saved");}}catch{if(!cancelled)setSyncState("error");}},350);return()=>{cancelled=true;clearTimeout(timer);};},[data,ready,remoteReady,workspaceId]);
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(""), 3000); return () => clearTimeout(t); } }, [toast]);
   const activeMatch = data.matches.find(m => m.id === selectedMatch);
@@ -104,8 +194,9 @@ export default function Home() {
   function download(){const blob=new Blob([exportData(data)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="biobuzz-datos-locales.json";a.click();URL.revokeObjectURL(a.href);notify("Exportación descargada");}
   async function chooseImport(file:File|null){if(!file)return;try{const parsed=validateImport(JSON.parse(await file.text()));setImportPreview(parsed);setMessage("");}catch(e){setImportPreview(null);setMessage(e instanceof SyntaxError?"El archivo no es JSON valido. Revisa el formato y vuelve a intentarlo.":e instanceof Error?e.message:"No se pudo leer el archivo.");}}
   function commitImport(){if(!importPreview)return;const conflict=findImportConflict(data,importPreview);if(conflict){setMessage(conflict);return;}setData(d=>({teams:[...d.teams,...importPreview.teams],matches:[...d.matches,...importPreview.matches],observations:[...d.observations,...importPreview.observations]}));setImportPreview(null);notify("Datos importados y guardados");}
-  function reset(){if(!confirm("Esto eliminará permanentemente todos los equipos, partidos y registros guardados en este navegador. ¿Continuar?"))return;setData(emptyData);setSelectedMatch("");setImportPreview(null);notify("Datos locales eliminados");}
-
+  function reset(){if(!confirm("Esto eliminará permanentemente los equipos, partidos y observaciones de este espacio de trabajo. ¿Continuar?"))return;setData(emptyData);setSelectedMatch("");setImportPreview(null);notify("Datos del espacio eliminados");}
+  async function signOut(){try{await signOutSupabase();window.location.replace("/login");}catch(error){notify(error instanceof Error?error.message:"No se pudo cerrar la sesión.");}}
+  if(!ready)return <main className="access-loading"><ThemeInitializer/><div>{loadingError?<><h1>No se pudo abrir el espacio de trabajo</h1><p>{loadingError}</p><button className="button button-primary" onClick={()=>{setLoadingError("");setLoadAttempt(value=>value+1);}}>Reintentar</button><button className="text-button" onClick={()=>router.replace("/login")}>Volver al inicio de sesión</button></>:<><h1>Validando acceso</h1><p>Comprobando la sesión y la membresía antes de cargar los datos…</p></>}</div></main>;
   return <div className="app-shell"><ThemeInitializer/>
     <aside className="sidebar"><div className="brand"><div className="brand-mark"><BrandMark size={25}/></div><div><b>BIOBUZZ</b><span>SCOUTING</span></div></div>
       <div className="competition-switch" role="group" aria-label="Tipo de competición">
@@ -114,10 +205,11 @@ export default function Home() {
       </div>
       <div className="season"><span className="season-label">TEMPORADA ACTIVA</span><button className="season-select">2026 — 2027 <ChevronDown size={14}/></button><span className="season-state"><i/> Sin datos importados</span></div>
       <div className="nav-label">ESPACIO DE TRABAJO</div><nav>{nav.map(n=><button key={n.id} aria-label={n.label} title={n.label} className={`nav-item ${page===n.id?"active":""}`} onClick={()=>{setPage(n.id);setMessage("")}}><n.icon size={17}/><span>{n.label}</span>{n.id==="first-scouting"&&<span className="nav-dot"/>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="user-row"><div className="avatar">B</div><div className="user-copy"><b>Espacio local</b><span>Sin sesión conectada</span></div><span className="online-dot"/></div></div>
+      <div className="sidebar-bottom"><div className="user-row"><div className="avatar">{userEmail.slice(0,1).toUpperCase()||"B"}</div><div className="user-copy"><b>{workspaceName||"Espacio de trabajo"}</b><span title={userEmail}>{userEmail} · {workspaceRole==="admin"?"Admin":workspaceRole==="scout"?"Scout":workspaceRole==="viewer"?"Solo lectura":"Miembro"}</span></div><button className="logout-button" type="button" onClick={()=>void signOut()} aria-label="Cerrar sesión" title="Cerrar sesión"><LogOut size={15}/></button></div></div>
     </aside>
-    <main className="main-area"><header className="topbar"><div className="breadcrumbs"><span>BioBuzz</span><span className="crumb-slash">/</span><b>{nav.find(n=>n.id===page)?.label}</b></div><div className="top-actions"><span className="top-season">{syncState==="local"?"LOCAL":syncState==="saving"?"SINCRONIZANDO":syncState==="saved"?"GUARDADO EN SUPABASE":"ERROR DE SINCRONIZACIÓN"}</span><span className="top-season">TEMPORADA <b>2026–27</b></span><div className="top-avatar">B</div></div></header>
+    <main className="main-area"><header className="topbar"><div className="breadcrumbs"><span>BioBuzz</span><span className="crumb-slash">/</span><b>{nav.find(n=>n.id===page)?.label}</b></div><div className="top-actions"><span className="top-season">{syncState==="saving"?"SINCRONIZANDO":syncState==="saved"?"GUARDADO EN SUPABASE":syncState==="error"?"ERROR DE SINCRONIZACIÓN":"CARGANDO"}</span><span className="top-season">TEMPORADA <b>2026–27</b></span><div className="top-avatar">{userEmail.slice(0,1).toUpperCase()||"B"}</div></div></header>
       <div className="content">
+        {workspaceRole==="viewer"&&<div className="notice" role="status"><div className="notice-icon"><ShieldCheck size={16}/></div><div><b>Acceso de solo lectura</b><span>Tu rol puede consultar este espacio, pero no guardar, importar ni eliminar datos.</span></div></div>}
         {competitionMode==="frc" ? <div className="frc-coming-soon">
           <div className="frc-coming-mark"><BrandMark size={42}/></div>
           <div className="eyebrow"><span className="eyebrow-line"/> FRC / PRÓXIMAMENTE</div>

@@ -8,7 +8,10 @@ export async function GET() {
   if (authError || !user) return NextResponse.json({ error: "Inicia sesión para ver tus grupos." }, { status: 401 });
   const { data, error } = await supabase.from("workspace_members").select("workspace_id,role,workspaces!inner(id,name)").eq("user_id", user.id);
   if (error) return NextResponse.json({ error: "No se pudieron cargar los grupos." }, { status: 403 });
-  return NextResponse.json({ workspaces: (data ?? []).map((item) => ({ id: item.workspace_id, role: item.role, ...(item.workspaces as unknown as { name: string }) })) });
+  return NextResponse.json({
+    user: { id: user.id, email: user.email ?? null },
+    workspaces: (data ?? []).map((item) => ({ id: item.workspace_id, role: item.role, ...(item.workspaces as unknown as { name: string }) })),
+  });
 }
 
 export async function POST(request: Request) {

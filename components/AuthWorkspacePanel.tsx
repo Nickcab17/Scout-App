@@ -3,15 +3,18 @@ import { FormEvent, useEffect, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { AppData } from "@/lib/types";
 import { readData, validateImport } from "@/lib/persistence";
+import { signOutSupabase } from "@/lib/supabase/browser-auth";
+import { ACTIVE_WORKSPACE_STORAGE_KEY } from "@/lib/workspaces/constants";
 
 type Workspace = { id: string; name: string; role: string };
 type Member = { user_id: string; role: string };
 type Counts = { teams: number; matches: number; observations: number };
 
-export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalMode }: {
+export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalMode, required = false }: {
   visible: boolean;
-  onWorkspaceReady: (id: string, data: AppData) => void;
+  onWorkspaceReady: (id: string, data: AppData, role: string, workspaceName: string) => void;
   onLocalMode: () => void;
+  required?: boolean;
 }) {
   const [configured, setConfigured] = useState(false);
   const [email, setEmail] = useState("");
@@ -114,7 +117,9 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
     try {
       const result = await request(`/api/workspaces/${id}/scouting`);
       const data = validateImport(result.data);
-      setSelected(id); setImportVerified(false); onWorkspaceReady(id, data);
+      const workspace = workspaces.find(group => group.id === id);
+      setSelected(id); setImportVerified(false); localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, id); onWorkspaceReady(id, data, workspace?.role || "", workspace?.name || "");
+      window.dispatchEvent(new CustomEvent("biobuzz:workspace-selected", { detail: { id, data, role: workspace?.role || "", name: workspace?.name || "" } }));
       const client = createSupabaseBrowserClient();
       if (client) {
         const { data: rows } = await client.from("workspace_members").select("user_id,role").eq("workspace_id", id);
@@ -173,7 +178,8 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
     try {
       const result = await request(`/api/workspaces/${selected}/import`, { method: "POST", body: JSON.stringify({ data: local }) });
       const refreshed = await request(`/api/workspaces/${selected}/scouting`);
-      onWorkspaceReady(selected, validateImport(refreshed.data)); setImportVerified(true);
+      const workspace = workspaces.find(group => group.id === selected);
+      onWorkspaceReady(selected, validateImport(refreshed.data), workspace?.role || "", workspace?.name || ""); setImportVerified(true);
       setStatus(`Importación verificada: ${result.inserted.teams} equipos, ${result.inserted.matches} partidos y ${result.inserted.observations} observaciones nuevos.`);
     } catch (error) { setStatus(error instanceof Error ? error.message : "Falló la importación; los datos locales se conservaron."); }
     finally { setBusy(false); }
@@ -186,14 +192,20 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
   }
 
   async function signOut() {
-    const client = createSupabaseBrowserClient(); if (client) await client.auth.signOut();
-    setUser(""); setWorkspaces([]); setSelected(""); onLocalMode(); setStatus("Sesión cerrada; se usa el almacenamiento local.");
+    setBusy(true);
+    try {
+      await signOutSupabase();
+      setUser(""); setWorkspaces([]); setSelected(""); onLocalMode();
+      window.location.replace("/login");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "No se pudo cerrar la sesión.");
+    } finally { setBusy(false); }
   }
 
   if (!visible) return null;
   return <section className="panel workspace-panel">
-    <div className="panel-head"><div><h2>Cuenta y espacio de trabajo</h2><p>Autenticación y persistencia por grupo</p></div></div>
-    {!configured ? <div className="scoring-status"><b>Supabase no está configurado.</b><p>Define NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY, aplica la migración SQL y reinicia Next.js.</p></div>
+    <div className="panel-head"><div><h2>{required ? "Acceso a BioBuzz" : "Cuenta y espacio de trabajo"}</h2><p>{required ? "Autenticación y membresía obligatorias" : "Autenticación y persistencia por grupo"}</p></div></div>
+    {!configured ? <div className="scoring-status"><b>Supabase no está configurado.</b><p>Configura NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY en el entorno del servidor para habilitar el inicio de sesión. No se permite continuar en modo local.</p></div>
       : !user ? <>
         {authMode === "forgot" ? <form className="form-stack" onSubmit={sendRecovery}>
           <div className="auth-form-heading"><b>Recuperar contraseña</b><span>Ingresa tu correo para recibir un enlace seguro de Supabase.</span></div>
@@ -213,7 +225,7 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
         <p>Sesión: <b>{user}</b> <button className="text-button" onClick={() => void signOut()}>Cerrar sesión</button></p>
         <form className="form-foot" onSubmit={event => void createWorkspace(event)}><input aria-label="Nombre del grupo" placeholder="Nombre del grupo" value={name} onChange={event => setName(event.target.value)}/><button className="button button-secondary" disabled={busy}>Crear grupo</button></form>
         <div className="form-stack">{workspaces.map(group => <div key={group.id} className="team-row"><div className="row-main"><b>{group.name}</b><span>Rol: {group.role}</span></div><button className="button button-primary" disabled={busy} onClick={() => void enterWorkspace(group.id)}>Abrir</button></div>)}</div>
-        {!workspaces.length && <p>Aún no perteneces a un grupo. Crea uno o acepta una invitación.</p>}
+        {!workspaces.length && <p>Aún no perteneces a un grupo. Crea uno o acepta una invitación. No se concede acceso hasta que exista una membresía válida.</p>}
         <form className="form-foot" onSubmit={event => void acceptInvite(event)}><input aria-label="Código de invitación" placeholder="Código de invitación" value={inviteCode} onChange={event => setInviteCode(event.target.value)}/><button className="button button-secondary" disabled={busy}>Aceptar invitación</button></form>
         {selected && workspaces.find(group => group.id === selected)?.role === "admin" && <>
           <form className="form-foot" onSubmit={event => void makeInvite(event)}><input type="email" required aria-label="Correo de invitación" placeholder="Correo de la persona" value={inviteEmail} onChange={event => setInviteEmail(event.target.value)}/><select value={inviteRole} onChange={event => setInviteRole(event.target.value as "scout" | "viewer")}><option value="scout">Scout</option><option value="viewer">Solo lectura</option></select><button className="button button-secondary" disabled={busy}>Crear invitación</button></form>
