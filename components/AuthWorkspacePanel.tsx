@@ -112,7 +112,11 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
     event.preventDefault(); setBusy(true);
     try {
       const result = await request("/api/workspaces", { method: "POST", body: JSON.stringify({ name }) });
-      setWorkspaces(old => [...old, result.workspace]); setName(""); setStatus("Grupo creado.");
+      const workspace = result.workspace as Workspace;
+      setWorkspaces(old => [...old.filter(group => group.id !== workspace.id), workspace]);
+      setName("");
+      const opened = await enterWorkspace(workspace.id, workspace);
+      setStatus(opened ? "Grupo creado. Ya tienes rol Admin y el grupo está activo." : "Grupo creado con rol Admin, pero no se pudieron cargar sus datos. Intenta abrirlo de nuevo.");
     } catch (error) { setStatus(error instanceof Error ? error.message : "No se pudo crear el grupo."); }
     finally { setBusy(false); }
   }
@@ -131,12 +135,12 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
     setStatus(error ? "No se pudo guardar el perfil. Comprueba la migración de perfiles." : "Perfil actualizado.");
   }
 
-  async function enterWorkspace(id: string) {
+  async function enterWorkspace(id: string, workspaceOverride?: Workspace): Promise<boolean> {
     setBusy(true); setStatus("Cargando datos del grupo…");
     try {
       const result = await request(`/api/workspaces/${id}/scouting`);
       const data = validateImport(result.data);
-      const workspace = workspaces.find(group => group.id === id);
+      const workspace = workspaceOverride ?? workspaces.find(group => group.id === id);
       setSelected(id); setImportVerified(false); localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, id); onWorkspaceReady(id, data, workspace?.role || "", workspace?.name || "");
       window.dispatchEvent(new CustomEvent("biobuzz:workspace-selected", { detail: { id, data, role: workspace?.role || "", name: workspace?.name || "" } }));
       const client = createSupabaseBrowserClient();
@@ -145,7 +149,8 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
         setMembers(rows || []);
       }
       setStatus("Datos del grupo cargados.");
-    } catch (error) { setStatus(error instanceof Error ? error.message : "No se pudo abrir el grupo."); }
+      return true;
+    } catch (error) { setStatus(error instanceof Error ? error.message : "No se pudo abrir el grupo."); return false; }
     finally { setBusy(false); }
   }
 
@@ -177,7 +182,13 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
     try {
       const { data, error } = await client.rpc("accept_workspace_invite", { invite_token: inviteCode.trim() });
       if (error) throw error;
-      await refresh(); setStatus(`Invitación aceptada para el grupo ${data}.`);
+      const result = await request("/api/workspaces");
+      const groups = result.workspaces as Workspace[];
+      setWorkspaces(groups);
+      const workspace = groups.find(group => group.id === data);
+      if (!workspace) throw new Error("La invitación se aceptó, pero no se encontró una membresía válida para abrir el grupo.");
+      const opened = await enterWorkspace(workspace.id, workspace);
+      setInviteCode(""); setStatus(opened ? `Invitación aceptada. El grupo ${workspace.name} está activo con rol ${workspace.role}.` : "Invitación aceptada, pero no se pudieron cargar los datos del grupo. Intenta abrirlo de nuevo.");
     } catch (error) { setStatus(error instanceof Error ? error.message : "No se pudo aceptar la invitación."); }
     finally { setBusy(false); }
   }

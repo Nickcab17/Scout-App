@@ -7,6 +7,7 @@ Revisión estática del repositorio. No se aplicó ni alteró ninguna migración
 1. `202610270001_biobuzz_core.sql` es la base. Define workspaces, membresías y roles, perfiles, invitaciones, temporadas, eventos, equipos, partidos, Pit Scouting, observaciones, resultados y preferencias. Crea helpers de membresía/administrador, validación de equipos en partidos, perfil automático al registrar una cuenta, aceptación de invitaciones y políticas RLS. Requiere Supabase Auth (`auth.users`, `auth.uid()`) y `pgcrypto`/`extensions.digest`.
 2. `202610270002_first_official_data.sql` depende del core. Añade caché compartida de FIRST y selección de evento por workspace; los miembros pueden leer la selección y admin/scout pueden cambiarla. La caché queda reservada al rol `service_role`.
 3. `202611220001_match_scouting_extended.sql` depende de `matches` y `observations` del core. Añade identificadores oficiales FIRST, acciones, datos de scoring y los índices de consulta; no reemplaza ni borra observaciones.
+4. `202611240001_workspace_onboarding.sql` depende de `workspaces`, `workspace_members`, la política RLS de lectura y el trigger `workspace_owner_membership` del core. Añade una RPC `SECURITY INVOKER` que inserta el workspace y verifica la membresía Admin dentro de la misma transacción. No cambia políticas RLS ni concede acceso general.
 
 ## Revisión de seguridad
 
