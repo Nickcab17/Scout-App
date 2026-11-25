@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { normalizeHybridSchedule } from "@/lib/first/normalize";
 import { FirstApiError, getFirstJson } from "@/lib/first/server";
-import { FIRST_SEASON } from "@/lib/first/season";
+import { FIRST_SEASON, isSupportedFirstSeason } from "@/lib/first/season";
 
 export const runtime = "nodejs";
 type Context = { params: Promise<{ eventCode: string }> };
@@ -11,7 +11,7 @@ export async function GET(request: Request, { params }: Context) {
   const url = new URL(request.url);
   const season = Number(url.searchParams.get("season") ?? FIRST_SEASON);
   const level = url.searchParams.get("level") ?? "qual";
-  if (season !== FIRST_SEASON) return NextResponse.json({ error: "BioBuzz solo admite la temporada FTC 2026–2027 (FIRST 2026)." }, { status: 400 });
+  if (!isSupportedFirstSeason(season)) return NextResponse.json({ error: "La temporada FIRST no es válida." }, { status: 400 });
   if (level !== "qual" && level !== "playoff") return NextResponse.json({ error: "El nivel debe ser qual o playoff." }, { status: 400 });
   try {
     const key = `schedule:${season}:${eventCode.toUpperCase()}:${level}`;

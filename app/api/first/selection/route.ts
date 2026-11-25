@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { FIRST_SEASON } from "@/lib/first/season";
+import { isSupportedFirstSeason } from "@/lib/first/season";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export async function GET(request: Request) {
@@ -12,7 +12,7 @@ export async function GET(request: Request) {
   if (!uuid.test(workspaceId)) return NextResponse.json({ error: "El grupo no es válido." }, { status: 400 });
   const { data, error } = await supabase.from("workspace_event_selections").select("season,event_code,updated_at").eq("workspace_id", workspaceId).maybeSingle();
   if (error) return NextResponse.json({ error: "No se pudo leer el evento seleccionado para este grupo." }, { status: 403 });
-  return NextResponse.json({ selection: data?.season === FIRST_SEASON ? { season: data.season, eventCode: data.event_code, updatedAt: data.updated_at } : null });
+  return NextResponse.json({ selection: data && isSupportedFirstSeason(data.season) ? { season: data.season, eventCode: data.event_code, updatedAt: data.updated_at } : null });
 }
 
 export async function PUT(request: Request) {
@@ -24,7 +24,7 @@ export async function PUT(request: Request) {
   try { body = await request.json(); } catch { return NextResponse.json({ error: "JSON inválido." }, { status: 400 }); }
   if (!body || typeof body !== "object") return NextResponse.json({ error: "Faltan los datos de selección." }, { status: 400 });
   const row = body as Record<string, unknown>;
-  if (typeof row.workspaceId !== "string" || !uuid.test(row.workspaceId) || row.season !== FIRST_SEASON || typeof row.eventCode !== "string" || !/^[a-z\d]{3,30}$/i.test(row.eventCode)) {
+  if (typeof row.workspaceId !== "string" || !uuid.test(row.workspaceId) || typeof row.season !== "number" || !isSupportedFirstSeason(row.season) || typeof row.eventCode !== "string" || !/^[a-z\d]{3,30}$/i.test(row.eventCode)) {
     return NextResponse.json({ error: "La temporada o el evento no son válidos." }, { status: 400 });
   }
   const { error } = await supabase.from("workspace_event_selections").upsert({ workspace_id: row.workspaceId, season: row.season, event_code: row.eventCode.toUpperCase(), updated_by: user.id, updated_at: new Date().toISOString() }, { onConflict: "workspace_id" });

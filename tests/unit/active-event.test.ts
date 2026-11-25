@@ -30,6 +30,7 @@ test("active FIRST event round-trips and normalizes event codes", () => {
   });
 
   values.set(ACTIVE_FIRST_EVENT_KEY, JSON.stringify({ season: 2025, eventCode: "OLD25" }));
-  assert.equal(readActiveFirstEvent(), null);
-  assert.throws(() => writeActiveFirstEvent({ season: 2025, eventCode: "OLD25" }), /temporada 2026/);
+  assert.deepEqual(readActiveFirstEvent(), { season: 2025, eventCode: "OLD25", eventId: undefined, eventName: undefined });
+  writeActiveFirstEvent({ season: 2025, eventCode: "OLD25" });
+  assert.equal(readActiveFirstEvent()?.season, 2025);
 });

@@ -46,9 +46,9 @@ Las respuestas FIRST respetan `Last-Modified` / `If-Modified-Since`, timeout y r
 ## Configurar Supabase
 
 1. Crea un proyecto Supabase y habilita autenticación por correo y contraseña.
-2. Para espacios remotos existentes, aplica `supabase/migrations/202610270001_biobuzz_core.sql`. FTC Events no requiere migración ni conexión a Supabase.
+2. Revisa primero el orden, dependencias y políticas de las migraciones en [`docs/supabase-migration-audit.md`](docs/supabase-migration-audit.md). En una base existente, compara el historial y esquema antes de aplicar el baseline. No ejecutes migraciones remotas sin autorización.
 3. Define `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_ANON_KEY`; registra `/auth/callback` como URL de retorno.
-4. Las consultas de FTC Events y la selección del evento permanecen en caché y almacenamiento local; la integración oficial no escribe datos en Supabase.
+4. La caché oficial y la selección del evento tienen migraciones propias; las observaciones históricas se conservan al cambiar de evento.
 5. Comprueba RLS con cuentas de grupos diferentes.
 
 FTC Events publica datos cuando FIRST los sincroniza; los resultados y score details pueden no estar disponibles para eventos futuros o partidos en curso. La interfaz conserva los calendarios programados aunque falten resultados.

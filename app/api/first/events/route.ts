@@ -2,12 +2,12 @@ import { NextResponse } from "next/server";
 import { normalizeEvents } from "@/lib/first/normalize";
 import { FirstApiError, getFirstJson } from "@/lib/first/server";
 import { getAllFirstEventPages } from "@/lib/first/event-pagination";
-import { FIRST_SEASON } from "@/lib/first/season";
+import { FIRST_SEASON, isSupportedFirstSeason } from "@/lib/first/season";
 
 export const runtime = "nodejs";
 export async function GET(request: Request) {
   const season = Number(new URL(request.url).searchParams.get("season") ?? FIRST_SEASON);
-  if (season !== FIRST_SEASON) return NextResponse.json({ error: "BioBuzz solo admite la temporada FTC 2026–2027 (FIRST 2026)." }, { status: 400 });
+  if (!isSupportedFirstSeason(season)) return NextResponse.json({ error: "La temporada FIRST no es válida." }, { status: 400 });
   try {
     const refresh = new URL(request.url).searchParams.get("refresh") === "1";
     const pageResults = new Map<number, Awaited<ReturnType<typeof getFirstJson>>>();

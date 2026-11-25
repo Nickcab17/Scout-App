@@ -3,11 +3,6 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getSupabasePublicConfig } from "./config";
 
 const publicPages = new Set(["/login", "/auth/recovery", "/auth/callback"]);
-const publicApi = (pathname: string) =>
-  pathname === "/api/first/seasons" ||
-  pathname === "/api/first/events" ||
-  pathname.startsWith("/api/first/events/");
-
 function unauthenticatedResponse(request: NextRequest) {
   if (request.nextUrl.pathname.startsWith("/api/")) {
     return NextResponse.json({ error: "Se requiere una sesión válida." }, { status: 401 });
@@ -20,7 +15,8 @@ function unauthenticatedResponse(request: NextRequest) {
 export async function updateSupabaseSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const isPublicPage = publicPages.has(pathname);
-  if (isPublicPage || publicApi(pathname)) {
+  if (pathname === "/login") return NextResponse.next({ request });
+  if (isPublicPage) {
     const config = getSupabasePublicConfig();
     if (!config) return NextResponse.next({ request });
   }
@@ -44,8 +40,8 @@ export async function updateSupabaseSession(request: NextRequest) {
       },
     },
   });
-  const { data: { claims }, error } = await supabase.auth.getClaims();
-  if (!isPublicPage && !publicApi(pathname) && (error || typeof claims?.sub !== "string")) {
+  const { data, error } = await supabase.auth.getClaims();
+  if (!isPublicPage && (error || typeof data?.claims?.sub !== "string")) {
     return unauthenticatedResponse(request);
   }
   response.headers.set("Cache-Control", "private, no-store");

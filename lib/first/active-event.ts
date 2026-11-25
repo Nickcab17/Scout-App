@@ -1,4 +1,4 @@
-import { FIRST_SEASON } from "./season.ts";
+import { isSupportedFirstSeason } from "./season.ts";
 
 export type ActiveFirstEvent = {
   season: number;
@@ -14,7 +14,7 @@ export function readActiveFirstEvent(): ActiveFirstEvent | null {
     const raw = localStorage.getItem(ACTIVE_FIRST_EVENT_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<ActiveFirstEvent>;
-    if (parsed.season !== FIRST_SEASON || typeof parsed.eventCode !== "string" || !parsed.eventCode.trim()) return null;
+    if (typeof parsed.season !== "number" || !isSupportedFirstSeason(parsed.season) || typeof parsed.eventCode !== "string" || !parsed.eventCode.trim()) return null;
     return {
       season: Number(parsed.season),
       eventCode: parsed.eventCode.trim().toUpperCase(),
@@ -27,11 +27,11 @@ export function readActiveFirstEvent(): ActiveFirstEvent | null {
 }
 
 export function writeActiveFirstEvent(selection: ActiveFirstEvent) {
-  if (selection.season !== FIRST_SEASON || !/^[a-z\d]{3,30}$/i.test(selection.eventCode.trim())) {
-    throw new Error("Solo se pueden activar eventos FIRST de la temporada 2026.");
+  if (!isSupportedFirstSeason(selection.season) || !/^[a-z\d]{3,30}$/i.test(selection.eventCode.trim())) {
+    throw new Error("La temporada o el código del evento FIRST no son válidos.");
   }
   const normalized = {
-    season: FIRST_SEASON,
+    season: selection.season,
     eventCode: selection.eventCode.trim().toUpperCase(),
     eventId: selection.eventId,
     eventName: selection.eventName,

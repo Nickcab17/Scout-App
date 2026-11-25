@@ -3,6 +3,7 @@ import { validateImport } from "@/lib/persistence";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { canWriteWorkspace, getWorkspaceRole } from "@/lib/supabase/workspace-access";
 import { AppData } from "@/lib/types";
+import { selectNewObservationRows } from "@/lib/scouting/observation-insert";
 
 type Context = { params: Promise<{ workspaceId: string }> };
 const fail = (message: string, status = 400) => NextResponse.json({ error: message }, { status });
@@ -52,17 +53,24 @@ export async function PUT(request: Request, { params }: Context) {
   const teamRows = data.teams.map(row => ({ id: row.id, workspace_id: workspaceId, number: row.number, name: row.name, capabilities: row.capabilities, autonomous: row.autonomous, mechanical: row.mechanical, notes: row.notes, status: row.status, created_at: row.createdAt }));
   const matchRows = data.matches.map(row => ({ id: row.id, workspace_id: workspaceId, number: row.number, event: row.event, event_type: row.eventType ?? "not_configured", teams: row.teams, season: row.season ?? null, event_code: row.eventCode ?? null, tournament_level: row.tournamentLevel ?? null, official_match_id: row.officialMatchId ?? null, created_at: row.createdAt }));
   const observationRows = data.observations.map(row => ({ id: row.id, workspace_id: workspaceId, match_id: row.matchId, team_number: row.teamNumber, scout_user_id: auth.user.id, status: row.status, auto: row.auto, teleop: row.teleop, hive_tip: row.hiveTip, pollen: row.pollen, nectar: row.nectar, flower_garden: row.flowerGarden, leave_park: row.leavePark, issues: row.issues, notes: row.notes, scout_name: row.scoutName ?? "", scoring_input: row.scoringConfirmed ? row.scoring ?? null : null, captured_at: row.capturedAt ?? null, pollen_count: row.pollenCount ?? null, alliance: row.alliance ?? null, season: row.season ?? null, event_code: row.eventCode ?? null, tournament_level: row.tournamentLevel ?? null, official_match_id: row.officialMatchId ?? null, actions: row.actions ?? null, alliance_final: row.allianceFinal ?? null, scoring_confirmed: row.scoringConfirmed ?? false, official_result: row.officialResult ?? null, updated_at: row.updatedAt }));
+  const existingObservations = observationRows.length
+    ? await auth.supabase.from("observations").select("id,match_id,team_number").eq("workspace_id", workspaceId)
+    : { data: [], error: null };
+  if (existingObservations.error) return fail("No se pudieron comprobar las observaciones existentes.", 500);
+  const observationInsert = selectNewObservationRows(observationRows, existingObservations.data ?? []);
+  if (observationInsert.duplicate) return NextResponse.json({ error: "Este equipo ya tiene una observación para ese partido. Se conserva la primera captura.", code: "OBSERVATION_ALREADY_EXISTS" }, { status: 409 });
   const operations = [
     teamRows.length ? auth.supabase.from("teams").upsert(teamRows, { onConflict: "workspace_id,id" }) : null,
     matchRows.length ? auth.supabase.from("matches").upsert(matchRows, { onConflict: "workspace_id,id" }) : null,
-    observationRows.length ? auth.supabase.from("observations").upsert(observationRows, { onConflict: "workspace_id,match_id,team_number" }) : null,
+    observationInsert.rows.length ? auth.supabase.from("observations").insert(observationInsert.rows) : null,
   ];
   for (const operation of operations) {
     if (!operation) continue;
     const { error } = await operation;
+    if (error?.code === "23505") return NextResponse.json({ error: "Este equipo ya tiene una observación para ese partido. Se conserva la primera captura.", code: "OBSERVATION_ALREADY_EXISTS" }, { status: 409 });
     if (error) return fail("El servidor rechazó el guardado del grupo. Revisa membresía, RLS y conflictos.", 409);
   }
-  for (const [table, key] of [["observations", "observations"], ["matches", "matches"], ["teams", "teams"]] as const) {
+  for (const [table, key] of [["matches", "matches"], ["teams", "teams"]] as const) {
     const ids = deletes[key];
     if (!Array.isArray(ids) || !ids.length || ids.some(id => typeof id !== "string")) continue;
     const { error } = await auth.supabase.from(table).delete().eq("workspace_id", workspaceId).in("id", ids);

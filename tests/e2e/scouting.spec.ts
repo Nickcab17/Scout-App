@@ -1,10 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { registerAndOpenWorkspace } from "./support/local-auth";
 
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto("/");
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
+  await registerAndOpenWorkspace(page);
 });
 
 test("uses FIRST match data, records zero pollen, persists locally, and hides manual Teams", async ({ page }) => {

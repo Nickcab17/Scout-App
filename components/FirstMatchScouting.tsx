@@ -233,6 +233,8 @@ export default function FirstMatchScouting({ data, setData, activeEvent }: Props
     if (!teamNumber || !Number.isInteger(number)) { setError("Selecciona el robot observado."); return; }
     const participant = [...selectedMatch.redTeams, ...selectedMatch.blueTeams].some(team => team.number === number);
     if (!participant) { setError("El equipo seleccionado no participa en este partido oficial."); return; }
+    const savedMatch = data.matches.find(match => match.officialMatchId === selectedMatch.id);
+    if (savedMatch && data.observations.some(item => item.matchId === savedMatch.id && item.teamNumber === number)) { setError("Este equipo ya fue registrado para este partido. Se conserva la primera captura."); return; }
     if (!validActions) { setError("Corrige los contadores inválidos antes de guardar."); return; }
     try {
       const result = buildFirstMatchAndObservation(selectedMatch, number, pollenCount, data, actions);

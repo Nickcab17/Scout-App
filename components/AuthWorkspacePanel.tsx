@@ -23,6 +23,7 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
   const [displayName, setDisplayName] = useState("");
   const [authMode, setAuthMode] = useState<"sign_in"|"sign_up"|"forgot">("sign_in");
   const [user, setUser] = useState("");
+  const [profileSaving, setProfileSaving] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selected, setSelected] = useState("");
   const [name, setName] = useState("");
@@ -48,9 +49,13 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
     const { data } = await client.auth.getUser();
     setUser(data.user?.email || "");
     if (data.user) {
+      const { data: profile } = await client.from("profiles").select("display_name").eq("id", data.user.id).maybeSingle();
+      setDisplayName(profile?.display_name || String(data.user.user_metadata?.display_name || ""));
       try {
         const result = await request("/api/workspaces");
         setWorkspaces(result.workspaces || []);
+        const remembered = localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+        if (remembered && result.workspaces?.some((workspace: Workspace) => workspace.id === remembered)) setSelected(remembered);
       } catch (error) {
         setStatus(error instanceof Error ? error.message : "No se pudieron cargar grupos.");
       }
@@ -110,6 +115,20 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
       setWorkspaces(old => [...old, result.workspace]); setName(""); setStatus("Grupo creado.");
     } catch (error) { setStatus(error instanceof Error ? error.message : "No se pudo crear el grupo."); }
     finally { setBusy(false); }
+  }
+
+  async function saveProfile(event: FormEvent) {
+    event.preventDefault();
+    const client = createSupabaseBrowserClient();
+    if (!client) return;
+    const { data: { user: current }, error: userError } = await client.auth.getUser();
+    if (userError || !current) { setStatus("Tu sesión ya no es válida. Inicia sesión de nuevo."); return; }
+    const normalizedName = displayName.trim();
+    if (normalizedName.length < 2 || normalizedName.length > 100) { setStatus("El nombre debe tener entre 2 y 100 caracteres."); return; }
+    setProfileSaving(true);
+    const { error } = await client.from("profiles").update({ display_name: normalizedName, updated_at: new Date().toISOString() }).eq("id", current.id);
+    setProfileSaving(false);
+    setStatus(error ? "No se pudo guardar el perfil. Comprueba la migración de perfiles." : "Perfil actualizado.");
   }
 
   async function enterWorkspace(id: string) {
@@ -222,7 +241,16 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
           </div>
         </form>}
       </> : <>
-        <p>Sesión: <b>{user}</b> <button className="text-button" onClick={() => void signOut()}>Cerrar sesión</button></p>
+        <section className="account-profile" aria-labelledby="profile-heading">
+          <div className="panel-head"><div><h3 id="profile-heading">Mi perfil</h3><p>Datos personales de esta cuenta</p></div></div>
+          <form className="form-stack" onSubmit={event => void saveProfile(event)}>
+            <label className="field"><span>Nombre</span><input value={displayName} minLength={2} maxLength={100} required onChange={event => setDisplayName(event.target.value)}/></label>
+            <div className="profile-readonly"><span>Correo</span><b>{user}</b></div>
+            <div className="profile-readonly"><span>Rol en el workspace seleccionado</span><b>{workspaces.find(group => group.id === selected)?.role ?? "Sin workspace seleccionado"}</b></div>
+            <div className="profile-readonly"><span>Workspace</span><b>{workspaces.find(group => group.id === selected)?.name ?? "Sin workspace"}</b></div>
+            <div className="form-foot"><button className="button button-secondary" disabled={profileSaving}>{profileSaving ? "Guardando…" : "Guardar perfil"}</button><button className="text-button" type="button" onClick={() => void signOut()}>Cerrar sesión</button></div>
+          </form>
+        </section>
         <form className="form-foot" onSubmit={event => void createWorkspace(event)}><input aria-label="Nombre del grupo" placeholder="Nombre del grupo" value={name} onChange={event => setName(event.target.value)}/><button className="button button-secondary" disabled={busy}>Crear grupo</button></form>
         <div className="form-stack">{workspaces.map(group => <div key={group.id} className="team-row"><div className="row-main"><b>{group.name}</b><span>Rol: {group.role}</span></div><button className="button button-primary" disabled={busy} onClick={() => void enterWorkspace(group.id)}>Abrir</button></div>)}</div>
         {!workspaces.length && <p>Aún no perteneces a un grupo. Crea uno o acepta una invitación. No se concede acceso hasta que exista una membresía válida.</p>}

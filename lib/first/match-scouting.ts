@@ -37,6 +37,9 @@ export function buildFirstMatchAndObservation(match: FirstRobotMatch, teamNumber
   const alliance = findRobotAlliance(match, teamNumber);
   if (!alliance) throw new Error("FIRST no proporcionó este robot en las alianzas del partido.");
   const existingMatch = current.matches.find(item => item.officialMatchId === match.id);
+  if (existingMatch && current.observations.some(item => item.matchId === existingMatch.id && item.teamNumber === teamNumber)) {
+    throw new Error("Este equipo ya fue registrado para este partido. Se conserva la primera captura.");
+  }
   const localMatch: Match = existingMatch ? {
     ...existingMatch,
     number: match.number,
