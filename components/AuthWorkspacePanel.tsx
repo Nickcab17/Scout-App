@@ -7,7 +7,7 @@ import { signOutSupabase } from "@/lib/supabase/browser-auth";
 import { ACTIVE_WORKSPACE_STORAGE_KEY } from "@/lib/workspaces/constants";
 
 type Workspace = { id: string; name: string; role: string };
-type Member = { user_id: string; role: string };
+type Member = { user_id: string; display_name: string | null; role: string };
 type Counts = { teams: number; matches: number; observations: number };
 
 export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalMode, required = false }: {
@@ -266,7 +266,7 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
         {selected && workspaces.find(group => group.id === selected)?.role === "admin" && <>
           <form className="form-foot" onSubmit={event => void makeInvite(event)}><input type="email" required aria-label="Correo de invitación" placeholder="Correo de la persona" value={inviteEmail} onChange={event => setInviteEmail(event.target.value)}/><select value={inviteRole} onChange={event => setInviteRole(event.target.value as "scout" | "viewer")}><option value="scout">Scout</option><option value="viewer">Solo lectura</option></select><button className="button button-secondary" disabled={busy}>Crear invitación</button></form>
           {inviteCode && <p>Código de un solo uso (7 días): <code>{inviteCode}</code></p>}
-          <div className="form-stack"><b>Miembros</b>{members.map(member => <div className="team-row" key={member.user_id}><span className="row-main"><b>{member.user_id}</b></span><select aria-label={`Rol de ${member.user_id}`} value={member.role} onChange={event => void changeRole(member.user_id, event.target.value)}><option value="admin">Admin</option><option value="scout">Scout</option><option value="viewer">Solo lectura</option></select></div>)}</div>
+          <div className="form-stack"><b>Miembros</b>{members.map(member => <div className="team-row" key={member.user_id}><span className="row-main"><b>{member.display_name?.trim() || "Usuario sin nombre"}</b><span>{member.role === "admin" ? "Admin" : member.role === "scout" ? "Scout" : "Solo lectura"}</span></span><select aria-label={`Rol de ${member.display_name?.trim() || "Usuario sin nombre"}`} value={member.role} onChange={event => void changeRole(member.user_id, event.target.value)}><option value="admin">Admin</option><option value="scout">Scout</option><option value="viewer">Solo lectura</option></select></div>)}</div>
         </>}
         {selected && <div className="scoring-status"><p>Datos locales pendientes: {localCounts.teams} equipos · {localCounts.matches} partidos · {localCounts.observations} observaciones.</p><button className="button button-secondary" disabled={busy} onClick={() => void importLocal()}>Importar y verificar</button>{importVerified && <button className="text-button" onClick={removeLocal}>Eliminar copia local verificada</button>}</div>}
       </>}

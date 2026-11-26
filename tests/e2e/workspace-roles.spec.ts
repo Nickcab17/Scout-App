@@ -33,6 +33,9 @@ async function acceptInvite(browser: Browser, email: string, token: string) {
 
 test("Admin, Scout, and read-only roles enforce workspace write permissions", async ({ page, browser }) => {
   await registerAndOpenWorkspace(page);
+  await page.getByRole("button", { name: "Datos y ajustes" }).click();
+  await expect(page.locator(".workspace-panel")).toContainText("E2E Scout");
+  await expect(page.locator(".workspace-panel")).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
   const workspacesResponse = await page.request.get("/api/workspaces");
   const workspaces = await workspacesResponse.json();
   const workspaceId = workspaces.workspaces[0].id as string;

@@ -45,7 +45,20 @@ export function classifyEventWeeks(events: OfficialEvent[]): EventWeekClassifica
   const maxWeek = Math.max(0, ...weekEvents.keys());
   const groups = Array.from({ length: maxWeek }, (_, index) => {
     const week = index + 1;
-    return { key: `week-${week}`, title: `Semana ${week}`, events: weekEvents.get(week) ?? [] };
+    const datedEvents = [...(weekEvents.get(week) ?? [])].sort((left, right) =>
+      (dateOnly(left.dateStart ?? "") ?? 0) - (dateOnly(right.dateStart ?? "") ?? 0)
+      || left.name.localeCompare(right.name)
+      || left.code.localeCompare(right.code),
+    );
+    return { key: `week-${week}`, title: `Semana ${week}`, events: datedEvents };
+  });
+  other.sort((left, right) => {
+    const leftDate = left.dateStart ? dateOnly(left.dateStart) : null;
+    const rightDate = right.dateStart ? dateOnly(right.dateStart) : null;
+    if (leftDate !== null && rightDate !== null && leftDate !== rightDate) return leftDate - rightDate;
+    if (leftDate !== null && rightDate === null) return -1;
+    if (leftDate === null && rightDate !== null) return 1;
+    return left.name.localeCompare(right.name) || left.code.localeCompare(right.code);
   });
   groups.push({ key: "other", title: "Otros eventos / sin semana asignada", events: other });
   return { kickoffDate, groups };

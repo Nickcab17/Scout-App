@@ -22,7 +22,7 @@ export async function GET(_request: Request, { params }: Context) {
   const auth = await authorize(workspaceId);
   if ("response" in auth) return auth.response;
   if (auth.role !== "admin") return NextResponse.json({ error: "Solo un Admin puede consultar la lista de miembros." }, { status: 403 });
-  const { data, error } = await auth.supabase.from("workspace_members").select("user_id,role").eq("workspace_id", workspaceId);
+  const { data, error } = await auth.supabase.rpc("get_workspace_members_with_profiles", { p_workspace_id: workspaceId });
   if (error) return NextResponse.json({ error: "No se pudieron cargar los miembros." }, { status: 500 });
   return NextResponse.json({ members: data ?? [] });
 }

@@ -43,6 +43,18 @@ test("uses event start date to assign multi-day events", () => {
   assert.deepEqual(result.groups[0].events.map(item => item.code), ["KICKOFF", "MULTI"]);
 });
 
+test("sorts events by official start date within a week and keeps invalid dates unassigned", () => {
+  const result = classifyEventWeeks([
+    event("KICKOFF", "Official Kickoff", "2026-09-12"),
+    event("LATE", "Later Regional", "2026-09-18"),
+    event("EARLY", "Earlier Regional", "2026-09-13"),
+    event("INVALID", "Invalid date", "2026-02-30"),
+  ]);
+
+  assert.deepEqual(result.groups[0].events.map(item => item.code), ["KICKOFF", "EARLY", "LATE"]);
+  assert.equal(result.groups.at(-1)?.events[0].code, "INVALID");
+});
+
 test("uses each season's own kickoff anchor instead of carrying weeks across seasons", () => {
   const season2025 = classifyEventWeeks([
     event("KICKOFF25", "Season Kickoff", "2025-09-06"),

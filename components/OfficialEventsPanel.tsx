@@ -5,7 +5,7 @@ import { OfficialEvent, OfficialMatch, mergeOfficialMatches, normalizeHybridSche
 import { normalizeOfficialTeams, previewTeamImport, type OfficialTeam, type TeamImportPreview } from "@/lib/first/team-import";
 import { readData } from "@/lib/persistence";
 import { readActiveFirstEvent, type ActiveFirstEvent } from "@/lib/first/active-event";
-import { FIRST_SEASON } from "@/lib/first/season";
+import { FIRST_SEASON, isSupportedFirstSeason } from "@/lib/first/season";
 import { classifyEventWeeks, type EventWeekGroup } from "@/lib/first/event-weeks";
 
 type Level = "qual" | "playoff";
@@ -29,15 +29,21 @@ const eventTypeLabel = (event: OfficialEvent) => {
   return /regional/i.test(event.name) ? `Regional · ${type}` : type;
 };
 
-function EventWeekList({ groups, activeEvent }: {
+function EventWeekList({ groups, activeEvent, selectedCodes, onToggle, disabled }: {
   groups: EventWeekGroup[];
   activeEvent: ActiveFirstEvent | null;
+  selectedCodes: string[];
+  onToggle: (eventCode: string, selected: boolean) => void;
+  disabled: boolean;
 }) {
   return <div className="official-event-weeks">{groups.map(group => <details key={group.key} className="official-event-week" open={group.key === "week-1"}>
     <summary><span>{group.title}</span><span className="count-chip">{group.events.length}</span></summary>
     {group.events.length ? <div className="official-event-list">{group.events.map(event => <article className="official-event-row" key={event.id}>
       <div><b>{event.name}</b><span>{event.code} · {eventTypeLabel(event)}{event.dateStart ? ` · ${event.dateStart}${event.dateEnd && event.dateEnd !== event.dateStart ? `–${event.dateEnd}` : ""}` : " · Sin fecha publicada"}{event.city ? ` · ${event.city}` : ""}{event.stateProv ? ` · ${event.stateProv}` : ""}{event.country ? ` · ${event.country}` : ""}</span></div>
-      {activeEvent?.eventCode.toUpperCase() === event.code.toUpperCase() && <span className="official-badge">ACTIVO</span>}
+      <div className="official-event-row-actions">
+        {activeEvent?.eventCode.toUpperCase() === event.code.toUpperCase() && <span className="official-badge">ACTIVO</span>}
+        <label className="official-event-choice"><input type="checkbox" aria-label={`Seleccionar ${event.name}`} checked={selectedCodes.includes(event.code.toUpperCase())} disabled={disabled} onChange={change => onToggle(event.code, change.target.checked)}/><span>Seleccionar</span></label>
+      </div>
     </article>)}</div> : <p className="official-empty">No hay eventos para esta semana con la búsqueda actual.</p>}
   </details>)}</div>;
 }
@@ -53,10 +59,12 @@ function OfficialMatchCard({ match, scoreDetails }: { match: OfficialMatch; scor
   </article>;
 }
 
-export default function OfficialEventsPanel({ mode = "schedule", activeEvent, onActiveEventChange }: {
+export default function OfficialEventsPanel({ mode = "schedule", activeEvent, onActiveEventChange, workspaceId, workspaceRole }: {
   mode?: "events" | "schedule" | "results";
   activeEvent: ActiveFirstEvent | null;
   onActiveEventChange: (selection: ActiveFirstEvent) => void;
+  workspaceId: string;
+  workspaceRole: string;
 }) {
   const [store, setStore] = useState<Store>(emptyStore);
   const [storeLoaded, setStoreLoaded] = useState(false);
@@ -78,9 +86,19 @@ export default function OfficialEventsPanel({ mode = "schedule", activeEvent, on
   const [busyEvents, setBusyEvents] = useState(false);
   const [busySchedule, setBusySchedule] = useState(false);
   const [message, setMessage] = useState("");
+  const [selectedRegionalCodes, setSelectedRegionalCodes] = useState<string[]>([]);
+  const [loadedRegionalSelectionScope, setLoadedRegionalSelectionScope] = useState("");
+  const [regionalSelectionsLoadFailed, setRegionalSelectionsLoadFailed] = useState(false);
+  const [regionalSelectionsSaving, setRegionalSelectionsSaving] = useState(false);
+  const [regionalSelectionsMessage, setRegionalSelectionsMessage] = useState("");
+  const regionalSelectionSaveInFlight = useRef(false);
   const scheduleRequest = useRef(0);
-  const selectionStatus = "Selección guardada en este navegador.";
+  const selectionStatus = regionalSelectionsMessage || (selectedRegionalCodes.length === 1
+    ? "1 regional seleccionado y guardado en este grupo."
+    : `${selectedRegionalCodes.length} regionales seleccionados y guardados en este grupo.`);
   const scope = "local";
+  const regionalSelectionScope = `${workspaceId}:${season}`;
+  const regionalSelectionsLoaded = loadedRegionalSelectionScope === regionalSelectionScope;
   const eventCode = activeEvent?.season === season ? activeEvent.eventCode : "";
   const pendingEventCode = pendingSelection.currentEventCode === eventCode ? pendingSelection.code : "";
   const currentEventTeams = eventTeamsCode === eventCode ? eventTeams : [];
@@ -93,6 +111,53 @@ export default function OfficialEventsPanel({ mode = "schedule", activeEvent, on
   const filteredEvents = useMemo(() => (eventsSeason === season ? events : []).filter(event => `${event.name} ${event.code} ${event.type ?? ""} ${event.city ?? ""} ${event.stateProv ?? ""} ${event.country ?? ""} ${event.venue ?? ""}`.toLowerCase().includes(search.toLowerCase())), [events, eventsSeason, search, season]);
   const pageSize = 60;
   const visibleEvents = filteredEvents.slice(eventPage * pageSize, (eventPage + 1) * pageSize);
+
+  useEffect(() => {
+    if (!workspaceId || !isSupportedFirstSeason(season)) return;
+    let cancelled = false;
+    const selectionScope = `${workspaceId}:${season}`;
+    const timer = setTimeout(() => {
+      setRegionalSelectionsLoadFailed(false);
+      setSelectedRegionalCodes([]);
+      setRegionalSelectionsMessage("");
+      void fetch(`/api/first/selection/events?workspaceId=${encodeURIComponent(workspaceId)}&season=${season}`, { cache: "no-store" }).then(async response => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "No se pudieron cargar las selecciones del grupo.");
+        if (!cancelled) setSelectedRegionalCodes(Array.isArray(result.eventCodes) ? result.eventCodes : []);
+      }).catch(error => {
+        if (!cancelled) {
+          setRegionalSelectionsLoadFailed(true);
+          setRegionalSelectionsMessage(error instanceof Error ? error.message : "No se pudieron cargar las selecciones del grupo.");
+        }
+      }).finally(() => { if (!cancelled) setLoadedRegionalSelectionScope(selectionScope); });
+    }, 0);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [workspaceId, season]);
+
+  async function toggleRegionalSelection(code: string, checked: boolean) {
+    if (regionalSelectionSaveInFlight.current || !regionalSelectionsLoaded || regionalSelectionsLoadFailed || workspaceRole === "viewer") return;
+    regionalSelectionSaveInFlight.current = true;
+    const previous = selectedRegionalCodes;
+    const next = checked
+      ? [...new Set([...previous, code.toUpperCase()])]
+      : previous.filter(value => value !== code.toUpperCase());
+    setSelectedRegionalCodes(next);
+    setRegionalSelectionsSaving(true);
+    setRegionalSelectionsMessage("");
+    try {
+      const response = await fetch("/api/first/selection/events", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId, season, eventCodes: next }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "No se pudieron guardar las selecciones del grupo.");
+      setRegionalSelectionsMessage("");
+    } catch (error) {
+      setSelectedRegionalCodes(previous);
+      setRegionalSelectionsMessage(error instanceof Error ? error.message : "No se pudieron guardar las selecciones del grupo.");
+    } finally { regionalSelectionSaveInFlight.current = false; setRegionalSelectionsSaving(false); }
+  }
 
   useEffect(() => {
     if (!eventCode) return;
@@ -315,13 +380,13 @@ export default function OfficialEventsPanel({ mode = "schedule", activeEvent, on
       {mode === "schedule" && eventsSeason === season && events.length > 0 && filteredEvents.length === 0 && <p className="official-attribution">Ningún evento de esta temporada coincide con la búsqueda.</p>}
       {mode === "events" && <section className="panel official-matches"><div className="panel-head"><div><h2>Eventos oficiales FIRST</h2><p>{busyEvents ? "Consultando eventos oficiales…" : `${listedEvents.length} eventos disponibles en la temporada FIRST ${season}–${season + 1}`}</p></div><span className="count-chip">{listedEvents.length}</span></div>{listedEvents.length ? <div className="official-event-list">{listedEvents.map(event => <article className="official-event-row" key={event.id}><div><b>{event.name}</b><span>{event.code}{eventTypeLabel(event) ? ` · ${eventTypeLabel(event)}` : ""}{event.city ? ` · ${event.city}` : ""}{event.stateProv ? ` · ${event.stateProv}` : ""}{event.country ? ` · ${event.country}` : ""}</span></div>{activeEvent?.eventCode.toUpperCase() === event.code.toUpperCase() && <span className="official-badge">ACTIVO</span>}</article>)}</div> : <div className="official-empty">{busyEvents ? "Cargando eventos oficiales de FIRST…" : message || "No hay eventos oficiales disponibles."}</div>}</section>}
       {mode === "schedule" && eventCode && currentEventTeams.length > 0 && <section className="panel official-team-import"><div className="panel-head"><div><h2>Equipos participantes de FIRST</h2><p>{currentEventTeams.length} equipos publicados para este evento.</p></div><button className="button button-primary" onClick={openTeamImportPreview}>Vista previa e importar equipos</button></div>{importSummary && <div className="official-message"><span>{importSummary}</span></div>}{importPreview.length > 0 && <div className="official-team-preview"><div className="official-schedule-tools"><button className="button button-secondary" onClick={() => setSelectedImportNumbers(importPreview.map(team => team.number))}>Seleccionar todos</button><span>{selectedImportNumbers.length} de {importPreview.length} seleccionados</span></div><div className="table-wrap"><table><thead><tr><th>Importar</th><th>Equipo</th><th>Nombre FIRST</th><th>Estado</th></tr></thead><tbody>{importPreview.map(team => <tr key={team.number}><td><input aria-label={`Importar equipo ${team.number}`} type="checkbox" checked={selectedImportNumbers.includes(team.number)} onChange={event => setSelectedImportNumbers(values => event.target.checked ? [...values, team.number] : values.filter(number => number !== team.number))}/></td><td>{team.number}</td><td>{team.name}</td><td>{team.state === "new" ? "Nuevo" : team.state === "updated" ? "Actualizar datos oficiales" : "Ya existe"}</td></tr>)}</tbody></table></div><button className="button button-primary" disabled={!selectedImportNumbers.length} onClick={confirmTeamImport}>Confirmar importación</button></div>}</section>}
-      {mode !== "events" && eventCode && <div className="official-schedule-tools"><label className="field"><span className="field-label">Nivel de torneo</span><select value={level} onChange={event => setLevel(event.target.value as Level)}><option value="qual">Clasificación (qual)</option><option value="playoff">Eliminatorias (playoff)</option></select></label><button className="button button-primary" onClick={() => void refreshSchedule(true)} disabled={busySchedule}><RefreshCw size={15} className={busySchedule ? "spin" : ""}/> {busySchedule ? "Actualizando FIRST…" : mode === "schedule" ? "Actualizar calendario FIRST" : "Actualizar resultados FIRST"}</button><span>{selectionStatus}</span></div>}
+      {mode !== "events" && eventCode && <div className="official-schedule-tools"><label className="field"><span className="field-label">Nivel de torneo</span><select value={level} onChange={event => setLevel(event.target.value as Level)}><option value="qual">Clasificación (qual)</option><option value="playoff">Eliminatorias (playoff)</option></select></label><button className="button button-primary" onClick={() => void refreshSchedule(true)} disabled={busySchedule}><RefreshCw size={15} className={busySchedule ? "spin" : ""}/> {busySchedule ? "Actualizando FIRST…" : mode === "schedule" ? "Actualizar calendario FIRST" : "Actualizar resultados FIRST"}</button></div>}
       {message && <div className="official-message" role="status">{message.includes("FIRST") || message.includes("fall") || message.includes("Fall") ? <AlertTriangle size={15}/> : <CalendarDays size={15}/>}<span>{message}</span></div>}
     </section>
     <section className="panel official-matches" aria-label="Eventos FIRST disponibles">
       <div className="panel-head"><div><h2>Eventos FIRST disponibles</h2><p>{busyEvents ? "Consultando eventos oficiales…" : `${listedEvents.length} eventos disponibles en la temporada FIRST ${season}–${season + 1}`}</p></div><span className="count-chip">{listedEvents.length}</span></div>
-      <p className="official-attribution">Semana N se calcula desde la fecha de inicio del evento Kickoff publicado por FIRST, en periodos consecutivos de 7 días, como el indicador “Week N since kickoff” de FTC Events. Inicio de temporada usado: {eventWeekClassification.kickoffDate ?? "sin kickoff publicado en esta lista"}. Sin fecha de inicio, antes del kickoff o sin fecha de kickoff de referencia: “Otros”.</p>
-      {listedEvents.length ? <EventWeekList groups={eventWeekGroups} activeEvent={activeEvent}/> : <div className="official-empty">{busyEvents ? "Cargando eventos oficiales de FIRST…" : message || "No hay eventos oficiales disponibles para esta temporada."}</div>}
+      <p className="official-attribution" role="status">{selectionStatus}</p><p className="official-attribution">Semana N se calcula desde la fecha de inicio del evento Kickoff publicado por FIRST, en periodos consecutivos de 7 días, como el indicador “Week N since kickoff” de FTC Events. Inicio de temporada usado: {eventWeekClassification.kickoffDate ?? "sin kickoff publicado en esta lista"}. Sin fecha de inicio, antes del kickoff o sin fecha de kickoff de referencia: “Otros”.</p>
+      {listedEvents.length ? <EventWeekList groups={eventWeekGroups} activeEvent={activeEvent} selectedCodes={selectedRegionalCodes} onToggle={(code, checked) => void toggleRegionalSelection(code, checked)} disabled={!regionalSelectionsLoaded || regionalSelectionsLoadFailed || regionalSelectionsSaving || workspaceRole === "viewer"}/> : <div className="official-empty">{busyEvents ? "Cargando eventos oficiales de FIRST…" : message || "No hay eventos oficiales disponibles para esta temporada."}</div>}
     </section>
     {mode !== "events" && eventCode && currentEventTeams.length > 0 && <section className="panel official-matches"><div className="panel-head"><div><h2>Equipos participantes</h2><p>Equipos oficiales asociados a {selectedEvent?.name ?? eventCode}</p></div><span className="count-chip">{currentEventTeams.length}</span></div><div className="official-attribution">{currentEventTeams.map(team => `${String(team.teamNumber ?? "")}${team.nameFull || team.nameShort || team.teamName ? ` · ${String(team.nameFull ?? team.nameShort ?? team.teamName)}` : ""}`).filter(Boolean).join("  /  ")}</div></section>}
     {!eventCode && <section className="panel official-matches" aria-label="Calendario de partidos"><div className="panel-head"><div><h2>Calendario de partidos</h2><p>El calendario aparece al confirmar un evento activo.</p></div></div><div className="official-empty">Selecciona un regional de FIRST para consultar su calendario.</div></section>}
