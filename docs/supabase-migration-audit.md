@@ -7,7 +7,20 @@ Revisión estática del repositorio. No se aplicó ni alteró ninguna migración
 1. `202610270001_biobuzz_core.sql` es la base. Define workspaces, membresías y roles, perfiles, invitaciones, temporadas, eventos, equipos, partidos, Pit Scouting, observaciones, resultados y preferencias. Crea helpers de membresía/administrador, validación de equipos en partidos, perfil automático al registrar una cuenta, aceptación de invitaciones y políticas RLS. Requiere Supabase Auth (`auth.users`, `auth.uid()`) y `pgcrypto`/`extensions.digest`.
 2. `202610270002_first_official_data.sql` depende del core. Añade caché compartida de FIRST y selección de evento por workspace; los miembros pueden leer la selección y admin/scout pueden cambiarla. La caché queda reservada al rol `service_role`.
 3. `202611220001_match_scouting_extended.sql` depende de `matches` y `observations` del core. Añade identificadores oficiales FIRST, acciones, datos de scoring y los índices de consulta; no reemplaza ni borra observaciones.
-4. `202611240001_workspace_onboarding.sql` depende de `workspaces`, `workspace_members`, la política RLS de lectura y el trigger `workspace_owner_membership` del core. Añade una RPC `SECURITY INVOKER` que inserta el workspace y verifica la membresía Admin dentro de la misma transacción. No cambia políticas RLS ni concede acceso general.
+4. `202611240001_workspace_onboarding.sql` depende de `workspaces`, `workspace_members`, la política RLS de lectura y el trigger `workspace_owner_membership` del core. Añade una RPC `SECURITY INVOKER` que inserta el workspace y verifica la membresía Admin dentro de la misma transacción. El trigger existente usa `SECURITY DEFINER` con `search_path = ''` para completar esa membresía y no concede acceso general.
+5. `202611250001_onboarding_profile_backfill.sql` crea perfiles faltantes para cuentas Auth que ya existían y limita la ejecución de la RPC de creación a usuarios autenticados.
+
+Orden para un proyecto remoto nuevo, desde el SQL Editor y sin usar `schema.sql` a la vez:
+
+1. `202610270001_biobuzz_core.sql`
+2. `202610270002_first_official_data.sql`
+3. `202611220001_match_scouting_extended.sql`
+4. `202611240001_workspace_onboarding.sql`
+5. `202611250001_onboarding_profile_backfill.sql`
+
+El baseline crea las tablas y políticas que el resto necesita; no se deben ejecutar las migraciones 2–5 antes de él. Para un proyecto que ya contiene tablas, revisa y reconcilia el esquema antes de aplicar el baseline.
+
+El proyecto reportado no tiene `supabase_migrations.schema_migrations`; por eso no hay un historial de CLI que permita confirmar qué archivos se ejecutaron. En SQL Editor, registra manualmente cada archivo aplicado y no repitas un baseline si ya hay tablas o datos.
 
 ## Revisión de seguridad
 

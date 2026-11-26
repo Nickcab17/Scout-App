@@ -27,5 +27,7 @@ En **ScoutingApp → SQL Editor**, ejecuta, revisa el resultado y confirma cada 
 1. `supabase/migrations/202610270001_biobuzz_core.sql`
 2. `supabase/migrations/202610270002_first_official_data.sql`
 3. `supabase/migrations/202611220001_match_scouting_extended.sql`
+4. `supabase/migrations/202611240001_workspace_onboarding.sql`
+5. `supabase/migrations/202611250001_onboarding_profile_backfill.sql`
 
-Verifica que la primera cree el esquema de perfiles, workspaces, miembros, invitaciones y scouting con índices, funciones, triggers y RLS; la segunda añada caché FIRST y selección de evento por workspace con sus políticas; y la tercera amplíe `matches`/`observations` con datos de Match Scouting e índices. Comprueba el historial de migraciones y las políticas RLS después de cada paso. No pegues claves en SQL ni compartas `SUPABASE_SECRET_KEY`; las pruebas locales no requieren ninguna clave secreta.
+Verifica que la primera cree el esquema de perfiles, workspaces, miembros, invitaciones y scouting con índices, funciones, triggers y RLS; la segunda añada caché FIRST y selección de evento por workspace con sus políticas; la tercera amplíe `matches`/`observations`; la cuarta cree la RPC atómica de onboarding; y la quinta complete perfiles existentes. Registra cada archivo aplicado: en el proyecto reportado no existe `supabase_migrations.schema_migrations`. No pegues claves en SQL ni compartas `SUPABASE_SECRET_KEY`; las pruebas locales no requieren ninguna clave secreta.

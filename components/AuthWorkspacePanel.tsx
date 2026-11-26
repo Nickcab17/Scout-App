@@ -1,5 +1,5 @@
 "use client";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { AppData } from "@/lib/types";
 import { readData, validateImport } from "@/lib/persistence";
@@ -35,10 +35,11 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
   const [inviteRole, setInviteRole] = useState<"scout" | "viewer">("scout");
   const [members, setMembers] = useState<Member[]>([]);
   const [importVerified, setImportVerified] = useState(false);
+  const createInFlight = useRef(false);
 
   async function request(path: string, init?: RequestInit) {
     const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers || {}) } });
-    const result = await response.json();
+    const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "La solicitud falló.");
     return result;
   }
@@ -56,6 +57,7 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
         setWorkspaces(result.workspaces || []);
         const remembered = localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
         if (remembered && result.workspaces?.some((workspace: Workspace) => workspace.id === remembered)) setSelected(remembered);
+        else if (remembered) { localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY); setSelected(""); }
       } catch (error) {
         setStatus(error instanceof Error ? error.message : "No se pudieron cargar grupos.");
       }
@@ -109,7 +111,10 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
   }
 
   async function createWorkspace(event: FormEvent) {
-    event.preventDefault(); setBusy(true);
+    event.preventDefault();
+    if (createInFlight.current) return;
+    createInFlight.current = true;
+    setBusy(true); setStatus("");
     try {
       const result = await request("/api/workspaces", { method: "POST", body: JSON.stringify({ name }) });
       const workspace = result.workspace as Workspace;
@@ -118,7 +123,7 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
       const opened = await enterWorkspace(workspace.id, workspace);
       setStatus(opened ? "Grupo creado. Ya tienes rol Admin y el grupo está activo." : "Grupo creado con rol Admin, pero no se pudieron cargar sus datos. Intenta abrirlo de nuevo.");
     } catch (error) { setStatus(error instanceof Error ? error.message : "No se pudo crear el grupo."); }
-    finally { setBusy(false); }
+    finally { createInFlight.current = false; setBusy(false); }
   }
 
   async function saveProfile(event: FormEvent) {
@@ -143,11 +148,10 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
       const workspace = workspaceOverride ?? workspaces.find(group => group.id === id);
       setSelected(id); setImportVerified(false); localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, id); onWorkspaceReady(id, data, workspace?.role || "", workspace?.name || "");
       window.dispatchEvent(new CustomEvent("biobuzz:workspace-selected", { detail: { id, data, role: workspace?.role || "", name: workspace?.name || "" } }));
-      const client = createSupabaseBrowserClient();
-      if (client) {
-        const { data: rows } = await client.from("workspace_members").select("user_id,role").eq("workspace_id", id);
-        setMembers(rows || []);
-      }
+      if (workspace?.role === "admin") {
+        const result = await request(`/api/workspaces/${id}/members`);
+        setMembers(result.members || []);
+      } else setMembers([]);
       setStatus("Datos del grupo cargados.");
       return true;
     } catch (error) { setStatus(error instanceof Error ? error.message : "No se pudo abrir el grupo."); return false; }
@@ -156,36 +160,26 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
 
   async function makeInvite(event: FormEvent) {
     event.preventDefault();
-    const client = createSupabaseBrowserClient();
     const group = workspaces.find(item => item.id === selected);
-    if (!client || !group || group.role !== "admin") return;
-    setBusy(true);
+    if (!group || group.role !== "admin" || busy) return;
+    setBusy(true); setStatus("");
     try {
-      const token = crypto.randomUUID() + crypto.randomUUID();
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
-      const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
-      const { data: { user: current } } = await client.auth.getUser();
-      const { error } = await client.from("workspace_invites").insert({
-        workspace_id: selected, email: inviteEmail.trim().toLowerCase(), role: inviteRole,
-        token_hash: `\\x${hash}`, expires_at: new Date(Date.now() + 7 * 86400000).toISOString(), created_by: current?.id,
-      });
-      if (error) throw error;
-      setInviteCode(token); setStatus("Invitación creada. Comparte el código con la persona invitada.");
+      const result = await request(`/api/workspaces/${selected}/invites`, { method: "POST", body: JSON.stringify({ email: inviteEmail, role: inviteRole }) });
+      setInviteCode(result.token); setStatus("Invitación creada. Comparte el código con la persona invitada.");
     } catch (error) { setStatus(error instanceof Error ? error.message : "No se pudo crear la invitación."); }
     finally { setBusy(false); }
   }
 
   async function acceptInvite(event: FormEvent) {
     event.preventDefault();
-    const client = createSupabaseBrowserClient(); if (!client) return;
-    setBusy(true);
+    if (busy) return;
+    setBusy(true); setStatus("");
     try {
-      const { data, error } = await client.rpc("accept_workspace_invite", { invite_token: inviteCode.trim() });
-      if (error) throw error;
+      const accepted = await request("/api/workspaces/invites/accept", { method: "POST", body: JSON.stringify({ token: inviteCode }) });
       const result = await request("/api/workspaces");
       const groups = result.workspaces as Workspace[];
       setWorkspaces(groups);
-      const workspace = groups.find(group => group.id === data);
+      const workspace = groups.find(group => group.id === accepted.workspaceId);
       if (!workspace) throw new Error("La invitación se aceptó, pero no se encontró una membresía válida para abrir el grupo.");
       const opened = await enterWorkspace(workspace.id, workspace);
       setInviteCode(""); setStatus(opened ? `Invitación aceptada. El grupo ${workspace.name} está activo con rol ${workspace.role}.` : "Invitación aceptada, pero no se pudieron cargar los datos del grupo. Intenta abrirlo de nuevo.");
@@ -194,12 +188,15 @@ export default function AuthWorkspacePanel({ visible, onWorkspaceReady, onLocalM
   }
 
   async function changeRole(userId: string, role: string) {
-    const client = createSupabaseBrowserClient(); if (!client || !selected) return;
-    const { error } = await client.from("workspace_members").update({ role }).eq("workspace_id", selected).eq("user_id", userId);
-    if (error) { setStatus(error.message); return; }
-    setMembers(rows => rows.map(row => row.user_id === userId ? { ...row, role } : row));
+    if (!selected || busy) return;
+    setBusy(true);
+    try {
+      const result = await request(`/api/workspaces/${selected}/members`, { method: "PATCH", body: JSON.stringify({ userId, role }) });
+      setMembers(rows => rows.map(row => row.user_id === userId ? { ...row, role: result.member.role } : row));
+      setStatus("Rol actualizado.");
+    } catch (error) { setStatus(error instanceof Error ? error.message : "No se pudo cambiar el rol."); }
+    finally { setBusy(false); }
   }
-
   async function importLocal() {
     if (!selected) return;
     const local = readData();
