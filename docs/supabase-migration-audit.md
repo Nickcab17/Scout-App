@@ -9,6 +9,7 @@ Revisión estática del repositorio. No se aplicó ni alteró ninguna migración
 3. `202611220001_match_scouting_extended.sql` depende de `matches` y `observations` del core. Añade identificadores oficiales FIRST, acciones, datos de scoring y los índices de consulta; no reemplaza ni borra observaciones.
 4. `202611240001_workspace_onboarding.sql` depende de `workspaces`, `workspace_members`, la política RLS de lectura y el trigger `workspace_owner_membership` del core. Añade una RPC `SECURITY INVOKER` que inserta el workspace y verifica la membresía Admin dentro de la misma transacción. El trigger existente usa `SECURITY DEFINER` con `search_path = ''` para completar esa membresía y no concede acceso general.
 5. `202611250001_onboarding_profile_backfill.sql` crea perfiles faltantes para cuentas Auth que ya existían y limita la ejecución de la RPC de creación a usuarios autenticados.
+6. `202611250002_workspace_creation_rls_returning_fix.sql` corrige la interacción entre `INSERT ... RETURNING` y la política de lectura del workspace. Conserva `SECURITY INVOKER`, RLS, grants existentes y el trigger propietario.
 
 Orden para un proyecto remoto nuevo, desde el SQL Editor y sin usar `schema.sql` a la vez:
 
@@ -17,8 +18,9 @@ Orden para un proyecto remoto nuevo, desde el SQL Editor y sin usar `schema.sql`
 3. `202611220001_match_scouting_extended.sql`
 4. `202611240001_workspace_onboarding.sql`
 5. `202611250001_onboarding_profile_backfill.sql`
+6. `202611250002_workspace_creation_rls_returning_fix.sql`
 
-El baseline crea las tablas y políticas que el resto necesita; no se deben ejecutar las migraciones 2–5 antes de él. Para un proyecto que ya contiene tablas, revisa y reconcilia el esquema antes de aplicar el baseline.
+El baseline crea las tablas y políticas que el resto necesita; no se deben ejecutar las migraciones 2–6 antes de él. Para un proyecto que ya contiene tablas, revisa y reconcilia el esquema antes de aplicar el baseline.
 
 El proyecto reportado no tiene `supabase_migrations.schema_migrations`; por eso no hay un historial de CLI que permita confirmar qué archivos se ejecutaron. En SQL Editor, registra manualmente cada archivo aplicado y no repitas un baseline si ya hay tablas o datos.
 
