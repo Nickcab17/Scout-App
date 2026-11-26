@@ -2,6 +2,24 @@ import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { normalizeWorkspaceName } from "@/lib/workspaces/validation";
 
+type WorkspaceCreateError = {
+  code?: unknown;
+  message?: unknown;
+  details?: unknown;
+  hint?: unknown;
+};
+
+function logWorkspaceCreationFailure(stage: string, error: unknown) {
+  const fields = error && typeof error === "object" ? error as WorkspaceCreateError : {};
+  console.error("[POST /api/workspaces] workspace creation failed", {
+    stage,
+    code: typeof fields.code === "string" ? fields.code : null,
+    message: typeof fields.message === "string" ? fields.message : error instanceof Error ? error.message : "Unknown error",
+    details: typeof fields.details === "string" ? fields.details : null,
+    hint: typeof fields.hint === "string" ? fields.hint : null,
+  });
+}
+
 export async function GET() {
   const supabase = await createSupabaseServerClient();
   if (!supabase) return NextResponse.json({ error: "Supabase no está configurado." }, { status: 503 });
@@ -41,9 +59,18 @@ export async function POST(request: Request) {
   try { body = await request.json(); } catch { return NextResponse.json({ error: "Solicitud JSON inválida." }, { status: 400 }); }
   const name = normalizeWorkspaceName(typeof body === "object" && body !== null && "name" in body ? body.name : null);
   if (!name) return NextResponse.json({ error: "El nombre debe tener entre 2 y 100 caracteres después de quitar espacios." }, { status: 400 });
-  const { data, error } = await supabase.rpc("create_workspace_with_owner", { p_name: name });
+  let data: unknown;
+  let error: WorkspaceCreateError | null = null;
+  try {
+    const rpcResult = await supabase.rpc("create_workspace_with_owner", { p_name: name });
+    data = rpcResult.data;
+    error = rpcResult.error;
+  } catch (error) {
+    logWorkspaceCreationFailure("rpc.create_workspace_with_owner.transport", error);
+    return NextResponse.json({ error: "No se pudo crear el grupo de forma segura. Comprueba los permisos de ejecución de la RPC y el trigger workspace_owner_membership.", code: "WORKSPACE_CREATE_FAILED" }, { status: 500 });
+  }
   if (error) {
-    console.error("[POST /api/workspaces] atomic workspace creation failed", { code: error.code, message: error.message, details: error.details, hint: error.hint });
+    logWorkspaceCreationFailure("rpc.create_workspace_with_owner", error);
     if (error.code === "PGRST202" || error.code === "42883") {
       return NextResponse.json({ error: "La creación segura de grupos no está inicializada. Falta aplicar la migración de onboarding de workspaces.", code: "WORKSPACE_ONBOARDING_NOT_CONFIGURED" }, { status: 503 });
     }
@@ -52,7 +79,12 @@ export async function POST(request: Request) {
   }
   const workspace = data as { id: string; name: string; role: "admin" } | null;
   if (!workspace?.id || workspace.role !== "admin") {
-    console.error("[POST /api/workspaces] atomic function returned an invalid result");
+    logWorkspaceCreationFailure("rpc.create_workspace_with_owner.response_validation", {
+      code: "WORKSPACE_ADMIN_MEMBERSHIP_UNCONFIRMED",
+      message: "RPC returned an invalid workspace payload or a role other than admin.",
+      details: null,
+      hint: null,
+    });
     return NextResponse.json({ error: "No se confirmó la membresía Admin del grupo.", code: "WORKSPACE_ADMIN_MEMBERSHIP_UNCONFIRMED" }, { status: 500 });
   }
   return NextResponse.json({ workspace }, { status: 201 });
